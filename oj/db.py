@@ -177,6 +177,7 @@ MIGRATIONS = [
     ("problems", "author_id",     "INTEGER DEFAULT 0"),
     ("hacks",    "detail",       "TEXT DEFAULT ''"),
     ("hacks",    "attacker_submission_id", "INTEGER"),
+    ("problems", "std_source",   "TEXT DEFAULT ''"),
 ]
 
 

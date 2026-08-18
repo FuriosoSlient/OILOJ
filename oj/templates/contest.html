@@ -96,7 +96,7 @@ function render(){
   let phaseDesc='';
   if(s.phase==='before') phaseDesc='比赛尚未开始';
   else if(s.phase==='solve') phaseDesc='做题阶段：完成个人题，锁题后可与队友协作并 Hack 对方同位置个人题';
-  else if(s.phase==='hack') phaseDesc='公开 Hack 阶段：仅可 Hack 团队思维题，个人题锁定';
+  else if(s.phase==='hack') phaseDesc='公开 Hack 阶段：可 Hack 团队思维题；尚未锁题的选手仍可锁题以解锁团队题与 Hack';
   else phaseDesc='比赛已结束';
 
   let html=`
@@ -108,6 +108,7 @@ function render(){
       <div style="text-align:right">
         <div class="phase-time">${s.phase==='after'?'已结束':fmtClock(s.remaining)}</div>
         <div class="phase-desc">${s.viewer_locked?'🔒 你已锁题':(isMember?'未锁题':'')}</div>
+        ${s.can_lock?`<div class="mt10"><button class="btn btn-warning" onclick="doLock()">🔒 锁定个人题</button></div>`:''}
       </div>
     </div>`;
 
@@ -222,7 +223,7 @@ function renderProblems(s){
           <span>${p.score_total} 分</span>
           ${canSee?`<a href="/problem/${p.id}?contest_id=${cid}">查看/提交 →</a>`:'<span class="muted">锁题后可见对方个人题</span>'}
         </div>
-        ${mine && !s.viewer_locked && s.phase==='solve'?`
+        ${mine && s.can_lock?`
           <div class="mt10">
             <button class="btn btn-warning btn-sm" onclick="doLock()" style="width:100%;">🔒 锁定个人题</button>
           </div>`:''}
@@ -246,11 +247,12 @@ function renderProblems(s){
   });
   html+='</div>';
 
-  if(s.viewer_locked && s.phase==='solve'){
-    html+=`<div class="alert alert-info mt20">你已锁定个人题。现在可以与已锁题的队友在"队伍讨论"中交流，也可以在 Hack 中心攻击对方同位置选手的个人题。个人题无法再修改提交。</div>`;
+  if(s.viewer_locked && (s.phase==='solve'||s.phase==='hack')){
+    html+=`<div class="alert alert-info mt20">你已锁定个人题。现在可以与已锁题的队友在"队伍讨论"中交流，也可以使用 Hack 中心。个人题无法再修改提交。</div>`;
   }
-  if(!s.viewer_locked && s.phase==='solve' && me){
-    html+=`<div class="alert alert-warn mt20">⚠️ 锁定个人题后将<strong>无法再修改</strong>个人题提交，但可以解锁团队题、参与队伍讨论、并 Hack 对方同位置个人题。请在有把握后再锁定。</div>`;
+  if(s.can_lock){
+    html+=`<div class="alert alert-warn mt20">⚠️ 锁定个人题后将<strong>无法再修改</strong>个人题提交，但可以解锁团队题、参与队伍讨论、并 Hack。做题阶段与公开 Hack 阶段均可锁题。
+      <div class="mt10"><button class="btn btn-warning" onclick="doLock()">🔒 立即锁定个人题</button></div></div>`;
   }
   return html;
 }

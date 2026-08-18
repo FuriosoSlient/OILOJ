@@ -39,7 +39,7 @@ async function editProblem(pid){
            samples:'',sample_groups:[],
            constraints:'',time_limit:1000,memory_limit:256,problem_type:'standard',score_total:100,
            difficulty:'',is_public:0,tags:'',position:null,interactive:0,subtasks:[],
-           checker_type:'token',spj_source:'',spj_compiled:0,spj_log:'',author:''};
+           checker_type:'token',spj_source:'',spj_compiled:0,spj_log:'',author:'',std_source:''};
   if(pid){ const r = await API.get(`/api/admin/problem/${pid}`); p = r.problem; }
   editing = p;
   const diffOpts = ['',...DIFFICULTIES].map(d=>
@@ -121,6 +121,19 @@ async function editProblem(pid){
           </div>
           <div id="spj-log">${p.spj_log?`<div class="spj-log ${p.spj_compiled?'spj-ok':'spj-err'}">${esc(p.spj_log)}</div>`:''}</div>
         </div>
+
+        <h3 style="margin:16px 0 8px;font-size:14px;">标程 std（Hack 必需）</h3>
+        <div class="form-hint" style="margin-bottom:8px">
+          每道题必须提供一份标准程序（C++20）。Hack 时会先用标程跑选手提供的输入：
+          标程失败则数据非法（INVALID）。保存后写入 <code>data/problems/&lt;slug&gt;/ref.cpp</code>。
+        </div>
+        <div class="form-row"><div class="form-group">
+          <div class="md-split">
+            <textarea id="f_std" rows="16" spellcheck="false"
+                      placeholder="#include &lt;bits/stdc++.h&gt;&#10;using namespace std;&#10;int main(){ ... }">${esc(p.std_source||'')}</textarea>
+            <div class="md-preview" id="f_std_pv" style="padding:0"></div>
+          </div>
+        </div></div>
 
         <h3 style="margin:16px 0 8px;font-size:14px;">题面（支持 Markdown + LaTeX，右侧实时预览）</h3>
         ${mdField('题目背景（可留空，留空则不显示）','f_bg',p.background)}
@@ -287,7 +300,7 @@ async function saveProblem(quiet){
     time_limit:g('f_tl'), memory_limit:g('f_ml'), problem_type:g('f_type'),
     score_total:g('f_score'), difficulty:g('f_diff'), is_public:g('f_public'),
     tags:g('f_tags'), interactive:g('f_inter'),
-    checker_type:g('f_checker'), spj_source:g('f_spj'), author:g('f_author'),
+    checker_type:g('f_checker'), spj_source:g('f_spj'), std_source:g('f_std'), author:g('f_author'),
     subtasks: JSON.stringify(editing.subtasks||[]),
   };
   const pos=g('f_pos'); if(pos!=='') payload.position=pos;

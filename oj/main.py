@@ -589,6 +589,9 @@ async def compute_oil_state(db, contest, viewer=None):
             "created_at": h["created_at"], "judged_at": h["judged_at"],
         } for h in hacks],
         "viewer_locked": viewer_locked,
+        "can_lock": bool(viewer and viewer["team_id"]
+                         and viewer["id"] not in lock_map
+                         and phase in ("solve", "hack")),
     }
 
 # ============================================================
@@ -789,11 +792,28 @@ async def api_problems(contest_id: Optional[int] = None, user=Depends(current_us
     try:
         cur = await db.execute("SELECT * FROM problems ORDER BY id")
         rows = [dict(r) for r in await cur.fetchall()]
+        my_best = {}
+        if user:
+            cur = await db.execute(
+                "SELECT problem_id, MAX(score) AS best, "
+                "SUM(CASE WHEN status NOT IN ('PENDING','JUDGING') THEN 1 ELSE 0 END) AS judged "
+                "FROM submissions WHERE user_id=? GROUP BY problem_id",
+                (user["id"],))
+            for r in await cur.fetchall():
+                my_best[r["problem_id"]] = dict(r)
         out = []
         for p in rows:
             vis = await problem_visibility(db, p, user, contest_id)
             if not vis["visible"]:
                 continue
+            mb = my_best.get(p["id"])
+            full = p["score_total"] or 0
+            if mb and (mb["best"] or 0) >= full and full > 0:
+                attempt = "ac"
+            elif mb and (mb["judged"] or 0) > 0:
+                attempt = "tried"
+            else:
+                attempt = "none"
             out.append({
                 "id": p["id"], "slug": p["slug"], "title": p["title"],
                 "problem_type": p["problem_type"], "score_total": p["score_total"],
@@ -803,6 +823,9 @@ async def api_problems(contest_id: Optional[int] = None, user=Depends(current_us
                 "tags": p["tags"] or "",
                 "is_public": p["is_public"],
                 "author": p["author"] or "",
+                "attempt": attempt,
+                "my_score": (mb["best"] if mb else None),
+                "has_std": bool((p.get("std_source") or "").strip()),
             })
         return {"problems": out}
     finally:
@@ -1240,8 +1263,11 @@ async def api_lock(cid: int, user=Depends(current_user)):
     try:
         c = await fetch_contest(db, cid)
         if not c: raise HTTPException(404)
-        if contest_phase(c) != "solve":
-            raise HTTPException(403, "只有做题阶段可以锁题")
+        phase = contest_phase(c)
+        if phase not in ("solve", "hack"):
+            raise HTTPException(403, "只有做题阶段或公开 Hack 阶段可以锁题")
+        if not user["team_id"]:
+            raise HTTPException(403, "你尚未被分配队伍，无法锁题。请联系管理员将你加入参赛队伍。")
         if await is_locked(db, cid, user["id"]):
             raise HTTPException(400, "你已经锁题")
         await db.execute("INSERT INTO personal_locks(contest_id,user_id,locked_at) VALUES(?,?,?)",
@@ -1481,6 +1507,12 @@ async def admin_get_problem(pid: int, user=Depends(current_user)):
             for f in sorted(pdir.iterdir()):
                 if f.suffix in (".in", ".out"):
                     files.append({"name": f.name, "size": f.stat().st_size})
+            ref = pdir / "ref.cpp"
+            if not (p.get("std_source") or "").strip() and ref.exists():
+                try:
+                    p["std_source"] = ref.read_text(encoding="utf-8")
+                except Exception:
+                    pass
         p["files"] = files
         p["data_dir"] = str(pdir)
         return {"problem": p}
@@ -1512,6 +1544,7 @@ async def admin_save_problem(
     subtasks: str = Form("[]"),
     checker_type: str = Form("token"),
     spj_source: str = Form(""),
+    std_source: str = Form(""),
     author: Optional[str] = Form(None),
     user=Depends(current_user),
 ):
@@ -1541,6 +1574,8 @@ async def admin_save_problem(
         clash = await cur.fetchone()
         if clash and clash["id"] != id:
             raise HTTPException(400, f"slug '{slug}' 已被题目 #{clash['id']} 占用")
+        if problem_type != "mystery" and not (std_source or "").strip():
+            raise HTTPException(400, "请填写标程 std（Hack 判定依赖标程，写入 ref.cpp）")
 
         # 出题人：管理员可任意指定；其他人只能署自己的名，且不得改动他人题目的署名
         if is_admin(user):
@@ -1566,8 +1601,11 @@ async def admin_save_problem(
         )
         # Persist the SPJ source next to the problem data so the judge can build it.
         pdir = BASE / "data" / "problems" / slug
+        pdir.mkdir(parents=True, exist_ok=True)
+        # Standard solution is required for Hack (ref.cpp). Always persist what we have.
+        fields["std_source"] = std_source or ""
+        (pdir / "ref.cpp").write_text(std_source or "", encoding="utf-8", newline="\n")
         if checker_type == "spj":
-            pdir.mkdir(parents=True, exist_ok=True)
             (pdir / "spj.cpp").write_text(spj_source or "", encoding="utf-8", newline="\n")
             fields["spj_source"] = spj_source or ""
             fields["spj_compiled"] = 0        # needs a rebuild after every edit

@@ -70,6 +70,15 @@ table{width:100%;border-collapse:collapse;}
 th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--loj-border);}
 th{background:#fafbfc;font-weight:600;color:#555;font-size:13px;}
 tr:hover td{background:#fafbfc;}
+tr.pl-row.ac td{background:#f6ffed;}
+tr.pl-row.ac:hover td{background:#e8ffd6;}
+tr.pl-row.tried td{background:#fffbe6;}
+tr.pl-row.tried:hover td{background:#fff3bf;}
+.pl-status{width:28px;text-align:center;}
+.pl-dot{font-size:14px;line-height:1;}
+.pl-dot.ac{color:var(--loj-green);}
+.pl-dot.tried{color:var(--loj-orange);}
+.pl-dot.none{color:#ccc;}
 
 /* Buttons */
 .btn{

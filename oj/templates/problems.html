@@ -14,7 +14,7 @@
       <div class="card">
         <div class="card-header">题目列表</div>
         <table>
-          <thead><tr><th>#</th><th>标题</th><th>类型</th><th>难度</th><th>出题人</th><th>满分</th><th>时限</th><th>内存</th></tr></thead>
+          <thead><tr><th></th><th>#</th><th>标题</th><th>类型</th><th>难度</th><th>出题人</th><th>满分</th><th>时限</th><th>内存</th></tr></thead>
           <tbody id="list"></tbody>
         </table>
       </div>
@@ -29,7 +29,7 @@ const TYPE={personal:['个人题','type-personal','diff-green'],thinking:['思�
   const r=await API.get('/api/problems');
   if(!r.problems.length){
     document.getElementById('list').innerHTML=
-      '<tr><td colspan="8" class="muted" style="padding:20px">暂无公开题目。比赛题目会在比赛结束后自动公开。</td></tr>';
+      '<tr><td colspan="9" class="muted" style="padding:20px">暂无公开题目。比赛题目会在比赛结束后自动公开。</td></tr>';
     return;
   }
   document.getElementById('list').innerHTML=r.problems.map(p=>{
