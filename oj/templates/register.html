@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>注册 - OIL OJ</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar"><div class="title">注册</div></div>
+    <div class="content">
+      <div class="auth-wrap">
+        <div class="card">
+          <div class="logo-big">OIL<span style="color:var(--loj-blue)">OJ</span></div>
+          <p class="muted text-center mb20">注册后可提交题目；OIL 比赛账号需由管理员分配队伍。</p>
+          <div id="err"></div>
+          <form id="f">
+            <div class="form-group"><label>用户名</label><input type="text" name="username" required minlength="2"></div>
+            <div class="form-group"><label>昵称（可选）</label><input type="text" name="display_name"></div>
+            <div class="form-group"><label>密码</label><input type="password" name="password" required minlength="4"></div>
+            <button class="btn btn-primary" style="width:100%;padding:10px;" type="submit">注 册</button>
+          </form>
+          <p class="text-center mt20 muted">已有账号？<a href="/login">去登录</a></p>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+<script>
+(async()=>{ const me=await loadMe(); if(me) location.href='/'; renderLayout(me);
+document.getElementById('f').onsubmit=async e=>{
+  e.preventDefault();
+  const fd=new FormData(e.target);
+  try{
+    await API.post('/api/register',{username:fd.get('username'),password:fd.get('password'),display_name:fd.get('display_name')});
+    location.href='/';
+  }catch(err){ document.getElementById('err').innerHTML=`<div class="alert alert-error">${esc(err.message)}</div>`; }
+};
+})();
+</script>
+</body>
+</html>
