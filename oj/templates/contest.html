@@ -63,6 +63,43 @@ function restoreDrafts(){
     else el.value = v;
   });
 }
+function keepTarget(el){
+  return el && el.dataset && el.dataset.keep;
+}
+function focusedKeep(){
+  return keepTarget(document.activeElement) ? document.activeElement : null;
+}
+// Persist drafts as the user types so an SSE redraw cannot lose uncommitted IME text.
+document.getElementById('app').addEventListener('input', e=>{
+  const el = e.target;
+  if(!keepTarget(el)) return;
+  if(el.type === 'checkbox' || el.type === 'radio') DRAFTS[el.dataset.keep] = el.checked;
+  else DRAFTS[el.dataset.keep] = el.value;
+});
+document.getElementById('app').addEventListener('change', e=>{
+  const el = e.target;
+  if(!keepTarget(el)) return;
+  if(el.type === 'checkbox' || el.type === 'radio') DRAFTS[el.dataset.keep] = el.checked;
+  else DRAFTS[el.dataset.keep] = el.value;
+});
+
+function stateFingerprint(s){
+  if(!s) return '';
+  const {remaining, now, ...rest} = s;
+  return JSON.stringify(rest);
+}
+let lastFp = '';
+const HACK_REPORTS = {};
+function restoreHackReports(){
+  Object.keys(HACK_REPORTS).forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.innerHTML=HACK_REPORTS[id];
+  });
+}
+function updateClockOnly(s){
+  const el = document.querySelector('.phase-time');
+  if(el) el.textContent = s.phase==='after'?'已结束':fmtClock(s.remaining);
+}
 // Remember scroll position of the message list too.
 let chatAtBottom = true;
 function captureChatScroll(){
@@ -81,14 +118,34 @@ async function load(){
 function connectSSE(){
   if(evt) evt.close();
   evt=new EventSource(`/api/contest/${cid}/stream`);
-  evt.onmessage=e=>{ state=JSON.parse(e.data); render(); };
+  evt.onmessage=e=>{ state=JSON.parse(e.data); render(false); };
   evt.onerror=()=>{ evt.close(); setTimeout(connectSSE,5000); };
 }
 
-function render(){
+function render(force){
+  const s=state;
+  if(!s) return;
+  const fp = stateFingerprint(s);
+  const typing = focusedKeep();
+  // SSE ticks every 3s. Never tear down the Hack/chat form while the user is
+  // composing — that was swallowing keystrokes (especially IME).
+  if(!force && typing){
+    updateClockOnly(s);
+    captureDrafts();
+    return;
+  }
+  if(!force && fp === lastFp && document.getElementById('app').querySelector('.phase-bar')){
+    updateClockOnly(s);
+    return;
+  }
+  lastFp = fp;
+
+  const activeKeep = typing && typing.dataset.keep;
+  const selStart = typing ? typing.selectionStart : null;
+  const selEnd = typing ? typing.selectionEnd : null;
+
   captureDrafts();
   captureChatScroll();
-  const s=state;
   const isMember = me && me.team_id;
   const myTeam = isMember ? membersByTeam()[me.team_id] : null;
 
@@ -132,6 +189,17 @@ function render(){
 
   document.getElementById('app').innerHTML=html;
   restoreDrafts();
+  restoreHackReports();
+  if(activeKeep){
+    const el = document.querySelector('[data-keep="'+activeKeep.replace(/"/g,'')+'"]');
+    if(el){
+      el.focus();
+      try{
+        if(typeof selStart === 'number' && typeof el.setSelectionRange === 'function')
+          el.setSelectionRange(selStart, selEnd);
+      }catch(e){}
+    }
+  }
   if(currentTab==='chat' && chatAtBottom) scrollChat();
 }
 
@@ -434,8 +502,13 @@ async function doPersonalHack(targetId,problemId){
         res.innerHTML='<div class="alert alert-info"><span class="live-dot"></span>判定中：标程 → 你的程序 → 对方程序×5 ...</div>';
     });
     await showHackReport(r.hack_id, res);
+    HACK_REPORTS[res.id] = res.innerHTML;
+    lastFp = '';
     await load();
-  }catch(e){ res.innerHTML=`<div class="alert alert-error">${esc(e.message)}</div>`; }
+  }catch(e){
+    res.innerHTML=`<div class="alert alert-error">${esc(e.message)}</div>`;
+    HACK_REPORTS[res.id] = res.innerHTML;
+  }
 }
 
 async function doTeamHack(problemId){
@@ -458,7 +531,7 @@ async function doTeamHack(problemId){
   }catch(e){ res.innerHTML=`<div class="alert alert-error">${esc(e.message)}</div>`; }
 }
 
-function setTab(t){ currentTab=t; render(); }
+function setTab(t){ currentTab=t; render(true); }
 
 (async()=>{
   me=await loadMe(); renderLayout(me,'contest');
@@ -474,6 +547,5 @@ async function resetContest(){
   try{ await API.post(`/api/admin/reset_contest/${cid}`,{}); toast('比赛已重置','success'); load(); }
   catch(e){toast(e.message,'error');}
 }
-</script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2ce256d0eee14fe',t:'MTc4NzAyNzAzOA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</script></body>
 </html>
