@@ -242,3 +242,61 @@ async def user_from_token(db, token: str):
         (token, time.time()),
     )
     return await row.fetchone()
+async def get_problems(current_user: dict = None, page: int = 1, page_size: int = 20):
+    offset = (page - 1) * page_size
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        
+        # 权限判定：超级管理员或题目管理员可见全部题目（含未公开）
+        is_admin_user = current_user and current_user.get("role") in ("admin", "problem_admin")
+        
+        if is_admin_user:
+            cursor = await db.execute(
+                "SELECT * FROM problems ORDER BY id ASC LIMIT ? OFFSET ?",
+                (page_size, offset)
+            )
+        elif current_user:
+            # 普通登录用户：公开题目 + 自己创建的题目
+            cursor = await db.execute(
+                "SELECT * FROM problems WHERE is_public = 1 OR author_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+                (current_user.get("id"), page_size, offset)
+            )
+        else:
+            # 游客：仅公开题目
+            cursor = await db.execute(
+                "SELECT * FROM problems WHERE is_public = 1 ORDER BY id ASC LIMIT ? OFFSET ?",
+                (page_size, offset)
+            )
+            
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+async def create_problem(title, description, input_format, output_format, samples, hint,
+                         time_limit=1000, memory_limit=256, is_public=0, author="", author_id=0):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("""
+            INSERT INTO problems (title, description, input_format, output_format, samples, hint,
+                                  time_limit, memory_limit, is_public, author, author_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (title, description, input_format, output_format, samples, hint,
+              time_limit, memory_limit, is_public, author, author_id))
+        await db.commit()
+        return cursor.lastrowid
+
+async def update_problem(problem_id, title, description, input_format, output_format, samples, hint,
+                         time_limit=1000, memory_limit=256, is_public=0, author=None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        if author is not None:
+            await db.execute("""
+                UPDATE problems SET title=?, description=?, input_format=?, output_format=?, samples=?,
+                                    hint=?, time_limit=?, memory_limit=?, is_public=?, author=?
+                WHERE id=?
+            """, (title, description, input_format, output_format, samples, hint,
+                  time_limit, memory_limit, is_public, author, problem_id))
+        else:
+            await db.execute("""
+                UPDATE problems SET title=?, description=?, input_format=?, output_format=?, samples=?,
+                                    hint=?, time_limit=?, memory_limit=?, is_public=?
+                WHERE id=?
+            """, (title, description, input_format, output_format, samples, hint,
+                  time_limit, memory_limit, is_public, problem_id))
+        await db.commit()
