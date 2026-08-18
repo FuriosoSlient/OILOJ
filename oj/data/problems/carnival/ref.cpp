@@ -18,9 +18,9 @@ int main(){
 	for(int i=1,x;i<=422;i++){
 		int u=0,v=0,w=0;
 		while(u==v||v==w||u==w){
-			u=(rand()<<16|rand())%n+1;
-			v=(rand()<<16|rand())%n+1;
-			w=(rand()<<16|rand())%n+1;
+			u=rand()%n+1;
+			v=rand()%n+1;
+			w=rand()%n+1;
 		}
 		printf("? %d %d %d\n",u,v,w);
 		fflush(stdout);

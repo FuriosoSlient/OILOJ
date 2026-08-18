@@ -344,14 +344,15 @@ def judge_submission(problem, code, hack_input=None, progress=None):
             all_ok = True
             for tc in tcs:
                 infile = pdir / tc["input"]
-                outfile = pdir / tc["output"]
+                outname = tc.get("output") or ""
+                outfile = (pdir / outname) if outname else None
                 if not infile.exists():
                     case_results.append({"subtask": si, "case": tc.get("input"), "status": "SE",
                                          "message": f"missing {tc['input']}"})
                     all_ok = False
                     continue
                 inp = read_text(infile)
-                expected = read_text(outfile) if outfile.exists() else None
+                expected = read_text(outfile) if outfile and outfile.exists() else None
                 if interactive and interactor_bin:
                     ok, msg = run_interactive(str(binp), interactor_bin, inp, tl, pdir)
                     status = "AC" if ok else "WA"
