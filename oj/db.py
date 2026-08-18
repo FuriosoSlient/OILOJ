@@ -179,22 +179,38 @@ MIGRATIONS = [
 
 
 async def init_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    db = await get_db()
-    try:
-        for stmt in SCHEMA.strip().split(";"):
-            s = stmt.strip()
-            if s:
-                await db.execute(s)
-        # Non-destructive migrations for databases created by older versions
-        for table, col, decl in MIGRATIONS:
-            cur = await db.execute(f"PRAGMA table_info({table})")
-            cols = {r[1] for r in await cur.fetchall()}
-            if col not in cols:
-                await db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    async with aiosqlite.connect(DB_PATH) as db:
+        # 创建 problems 表（如果不存在）
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS problems (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            description TEXT,
+            input_format TEXT,
+            output_format TEXT,
+            samples TEXT,
+            hint TEXT,
+            time_limit INTEGER DEFAULT 1000,
+            memory_limit INTEGER DEFAULT 256,
+            is_public INTEGER DEFAULT 0,
+            author TEXT DEFAULT '',
+            author_id INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        
+        # 兼容现有数据库：尝试补充 author 和 author_id 字段
+        try:
+            await db.execute("ALTER TABLE problems ADD COLUMN author TEXT DEFAULT '';")
+        except Exception:
+            pass  # 字段已存在则忽略
+            
+        try:
+            await db.execute("ALTER TABLE problems ADD COLUMN author_id INTEGER DEFAULT 0;")
+        except Exception:
+            pass
+            
         await db.commit()
-    finally:
-        await db.close()
 
 def hash_password(pw: str) -> str:
     salt = secrets.token_hex(8)
