@@ -556,22 +556,29 @@ async def problems_page(request: Request, user=Depends(current_user)):
         await db.close()
     return Render("problems.html", request, user, active="problems", problems=probs)
 
-@app.get("/problem/{pid}", response_class=HTMLResponse)
-async def problem_page(pid: int, request: Request, contest_id: Optional[int] = None, user=Depends(current_user)):
-    db = await get_db()
-    try:
-        p = await fetch_problem(db, pid)
-        if not p: raise HTTPException(404)
-        # Always serve the page shell: the client fetches /api/problem/{id}, which
-        # enforces the real permission check and renders a friendly message (with
-        # the nav intact) instead of dumping raw JSON at the user.
-        subs = []
-        if user:
-            cur = await db.execute("SELECT * FROM submissions WHERE user_id=? AND problem_id=? ORDER BY id DESC LIMIT 20", (user["id"], pid))
-            subs = [dict(r) for r in await cur.fetchall()]
-    finally:
-        await db.close()
-    return Render("problem.html", request, user, active="problems", problem=p, submissions=subs, contest_id=contest_id)
+@app.get("/problem/{problem_id}")
+async def problem_detail(problem_id: int, request: Request):
+    user = get_current_user(request)
+    problem = await db.get_problem(problem_id)
+    if not problem:
+        raise HTTPException(status_code=404, detail="题目不存在")
+        
+    # 如果题目未公开，检查用户是否有查看权限
+    if not problem.get("is_public"):
+        is_allowed = (
+            user and (
+                user.get("role") in ("admin", "problem_admin") or 
+                problem.get("author_id") == user.get("id")
+            )
+        )
+        if not is_allowed:
+            raise HTTPException(status_code=403, detail="该题目尚未公开")
+
+    return templates.TemplateResponse("problem.html", {
+        "request": request,
+        "problem": problem,
+        "user": user
+    })
 
 @app.get("/status", response_class=HTMLResponse)
 async def status_page(request: Request, user=Depends(current_user)):
@@ -2039,3 +2046,89 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000,
                 h11_max_incomplete_event_size=64*1024*1024,
                 limit_concurrency=200)
+
+@app.post("/problem/create")
+@app.post("/admin/problem/new")
+async def handle_create_problem(
+    request: Request,
+    title: str = Form(...),
+    description: str = Form(""),
+    input_format: str = Form(""),
+    output_format: str = Form(""),
+    samples: str = Form(""),
+    hint: str = Form(""),
+    time_limit: int = Form(1000),
+    memory_limit: int = Form(256),
+    is_public: int = Form(0),
+    author: Optional[str] = Form(None)
+):
+    user = get_current_user(request)
+    if not user or user.get("role") not in ("admin", "problem_admin"):
+        raise HTTPException(status_code=403, detail="无权创建题目")
+
+    # 确定出题人：admin 可指定他人；题目管理员或未填写时默认为当前用户名
+    if user.get("role") == "admin" and author and author.strip():
+        final_author = author.strip()
+    else:
+        final_author = user.get("username", "")
+
+    new_id = await db.create_problem(
+        title=title,
+        description=description,
+        input_format=input_format,
+        output_format=output_format,
+        samples=samples,
+        hint=hint,
+        time_limit=time_limit,
+        memory_limit=memory_limit,
+        is_public=is_public,
+        author=final_author,
+        author_id=user.get("id", 0)
+    )
+    return RedirectResponse(f"/problem/{new_id}", status_code=303)
+@app.post("/problem/{problem_id}/edit")
+async def handle_edit_problem(
+    problem_id: int,
+    request: Request,
+    title: str = Form(...),
+    description: str = Form(""),
+    input_format: str = Form(""),
+    output_format: str = Form(""),
+    samples: str = Form(""),
+    hint: str = Form(""),
+    time_limit: int = Form(1000),
+    memory_limit: int = Form(256),
+    is_public: int = Form(0),
+    author: Optional[str] = Form(None)
+):
+    user = get_current_user(request)
+    problem = await db.get_problem(problem_id)
+    if not problem:
+        raise HTTPException(status_code=404, detail="题目不存在")
+
+    can_edit = user and (
+        user.get("role") in ("admin", "problem_admin") or 
+        problem.get("author_id") == user.get("id")
+    )
+    if not can_edit:
+        raise HTTPException(status_code=403, detail="无权修改此题目")
+
+    # 仅超管可修改出题人字段，其余保持原有作者
+    new_author = None
+    if user.get("role") == "admin" and author is not None:
+        new_author = author.strip()
+
+    await db.update_problem(
+        problem_id=problem_id,
+        title=title,
+        description=description,
+        input_format=input_format,
+        output_format=output_format,
+        samples=samples,
+        hint=hint,
+        time_limit=time_limit,
+        memory_limit=memory_limit,
+        is_public=is_public,
+        author=new_author
+    )
+    return RedirectResponse(f"/problem/{problem_id}", status_code=303)
