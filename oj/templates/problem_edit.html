@@ -1,312 +1,116 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>题目编辑 - OIL OJ</title>
-<link rel="stylesheet" href="/static/style.css">
-<link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ "编辑题目" if problem else "新建题目" }} - OILOJ</title>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<div class="layout">
-  <aside class="sidebar" id="sidebar"></aside>
-  <main class="main">
-    <div class="topbar">
-      <div class="title" id="ptitle">题目编辑</div>
-      <div style="flex:1"></div>
-      <a href="/admin" class="btn btn-sm btn-default">← 返回管理后台</a>
+  <!-- 顶部导航栏 -->
+  <nav class="navbar">
+    <div class="container nav-container">
+      <a href="/" class="nav-brand">OILOJ</a>
+      <div class="nav-links">
+        <a href="/problems">题库</a>
+        <a href="/status">评测</a>
+        <a href="/contests">比赛</a>
+      </div>
+      <div class="nav-user">
+        <span class="username">{{ user.username }}</span>
+        <a href="/logout" class="btn btn-sm">退出</a>
+      </div>
     </div>
-    <div class="content">
-      <div id="editor"><div class="card"><div class="card-body muted">加载中...</div></div></div>
-    </div>
-  </main>
-</div>
-<script src="/static/vendor/marked/marked.min.js"></script>
-<script src="/static/vendor/katex/katex.min.js"></script>
-<script src="/static/vendor/katex/auto-render.min.js"></script>
-<script src="/static/vendor/dompurify/purify.min.js"></script>
-<script src="/static/app.js"></script>
-<script>
-let me=null, editing=null;
-const DIFFICULTIES=["入门","普及-","普及","普及+","提高","提高+","省选","NOI-","NOI","NOI+"];
+  </nav>
 
-// /admin/problem       -> create
-// /admin/problem/{id}  -> edit
-const _parts = location.pathname.split('/').filter(Boolean);
-const PID = (_parts.length >= 3 && /^\d+$/.test(_parts[2])) ? parseInt(_parts[2]) : null;
+  <div class="container main-content">
+    <div class="card edit-card">
+      <h2>{{ "编辑题目 #" ~ problem.id if problem else "新建题目" }}</h2>
+      
+      <form action="{{ '/problem/' ~ problem.id ~ '/edit' if problem else '/problem/create' }}" method="post">
+        
+        <!-- 题目标题 -->
+        <div class="form-group">
+          <label for="title">题目标题 <span class="required">*</span></label>
+          <input type="text" id="title" name="title" class="form-control" 
+                 value="{{ problem.title if problem else '' }}" required placeholder="请输入题目名称">
+        </div>
 
-async function editProblem(pid){
-  let p = {id:null,slug:'',title:'',description:'',background:'',input_format:'',output_format:'',
-           samples:'',sample_groups:[],
-           constraints:'',time_limit:1000,memory_limit:256,problem_type:'standard',score_total:100,
-           difficulty:'',is_public:0,tags:'',position:null,interactive:0,subtasks:[],
-           checker_type:'token',spj_source:'',spj_compiled:0,spj_log:''};
-  if(pid){ const r = await API.get(`/api/admin/problem/${pid}`); p = r.problem; }
-  editing = p;
-  const diffOpts = ['',...DIFFICULTIES].map(d=>
-    `<option value="${esc(d)}" ${p.difficulty===d?'selected':''}>${d||'（未标注）'}</option>`).join('');
-  document.getElementById('editor').innerHTML = `
-    <div class="card">
-      <div class="card-header">${pid?`编辑题目 #${pid}`:'新建题目'}</div>
-      <div class="card-body">
-        <div class="form-row">
-          <div class="form-group" style="flex:2"><label>标题</label>
-            <input type="text" id="f_title" value="${esc(p.title)}"></div>
-          <div class="form-group"><label>Slug（数据目录名）</label>
-            <input type="text" id="f_slug" value="${esc(p.slug||'')}">
-            <span class="form-hint">data/problems/&lt;slug&gt;/</span></div>
-          <div class="form-group"><label>类型</label>
-            <select id="f_type">
-              ${['standard','personal','thinking','mystery'].map(t=>
-                `<option value="${t}" ${p.problem_type===t?'selected':''}>${({standard:'普通题',personal:'个人题',thinking:'思维题',mystery:'神秘题'})[t]}</option>`).join('')}
-            </select></div>
+        <!-- 出题人字段 -->
+        <div class="form-group">
+          <label for="author">出题人 (Author)</label>
+          {% if user and user.role == 'admin' %}
+            <input type="text" id="author" name="author" class="form-control" 
+                   value="{{ problem.author if (problem and problem.author) else (user.username if user else '') }}" 
+                   placeholder="可指定出题人账号或署名">
+            <small class="form-hint">【管理员特权】您可以自由指定或修改此题目的出题人署名。</small>
+          {% else %}
+            <input type="text" id="author" name="author" class="form-control readonly-input" 
+                   value="{{ problem.author if (problem and problem.author) else (user.username if user else '') }}" 
+                   readonly>
+            <small class="form-hint">出题人默认标注为您的当前账号。</small>
+          {% endif %}
         </div>
+
+        <!-- 限制与公开状态设置 -->
         <div class="form-row">
-          <div class="form-group"><label>难度（比赛期间自动隐藏）</label>
-            <select id="f_diff">${diffOpts}</select></div>
-          <div class="form-group"><label>满分</label>
-            <input type="number" id="f_score" value="${p.score_total}"></div>
-          <div class="form-group"><label>时限 (ms)</label>
-            <input type="number" id="f_tl" value="${p.time_limit}"></div>
-          <div class="form-group"><label>内存 (MB)</label>
-            <input type="number" id="f_ml" value="${p.memory_limit}"></div>
-          <div class="form-group"><label>个人题位置 (0-4)</label>
-            <input type="number" id="f_pos" value="${p.position??''}" min="0" max="4"></div>
-        </div>
-        <div class="form-row">
-          <div class="form-group"><label>标签（逗号分隔）</label>
-            <input type="text" id="f_tags" value="${esc(p.tags||'')}"></div>
-          <div class="form-group" style="flex:0 0 auto"><label>公开可见</label>
-            <select id="f_public">
-              <option value="0" ${!p.is_public?'selected':''}>私有</option>
-              <option value="1" ${p.is_public?'selected':''}>公开</option>
+          <div class="form-group col-4">
+            <label for="time_limit">时间限制 (ms)</label>
+            <input type="number" id="time_limit" name="time_limit" class="form-control" 
+                   value="{{ problem.time_limit if problem else 1000 }}" min="100" max="10000" step="100">
+          </div>
+          <div class="form-group col-4">
+            <label for="memory_limit">空间限制 (MB)</label>
+            <input type="number" id="memory_limit" name="memory_limit" class="form-control" 
+                   value="{{ problem.memory_limit if problem else 256 }}" min="16" max="1024" step="16">
+          </div>
+          <div class="form-group col-4">
+            <label for="is_public">公开状态</label>
+            <select id="is_public" name="is_public" class="form-control">
+              <option value="0" {{ 'selected' if problem and not problem.is_public else '' }}>隐藏 (未公开)</option>
+              <option value="1" {{ 'selected' if problem and problem.is_public else '' }}>公开 (全员可见)</option>
             </select>
-            <span class="form-hint">属于未结束比赛的题目仍会被隐藏</span></div>
-          <div class="form-group" style="flex:0 0 auto"><label>交互题</label>
-            <select id="f_inter">
-              <option value="0" ${!p.interactive?'selected':''}>否</option>
-              <option value="1" ${p.interactive?'selected':''}>是</option>
-            </select></div>
-          <div class="form-group" style="flex:0 0 auto"><label>评测方式</label>
-            <select id="f_checker" onchange="toggleSpj()">
-              <option value="token" ${p.checker_type!=='spj'?'selected':''}>逐 token 比对（默认）</option>
-              <option value="spj" ${p.checker_type==='spj'?'selected':''}>SPJ 特殊评测（testlib）</option>
-            </select></div>
-        </div>
-
-        <div id="spj-box" style="display:none">
-          <h3 style="margin:16px 0 8px;font-size:14px;">SPJ 特殊评测（C++ / testlib）</h3>
-          <div class="form-hint" style="margin-bottom:8px">
-            用 C++ 编写并 <code>#include "testlib.h"</code>；编译时会自动加上
-            <code>-I data/lib</code>，无需手动放置 testlib.h。
-            调用约定：<code>spj &lt;input&gt; &lt;output&gt; &lt;answer&gt;</code>，
-            用 <code>quitf(_ok/_wa, "...")</code> 返回判定。
           </div>
-          <div class="form-row"><div class="form-group">
-            <div class="md-split">
-              <textarea id="f_spj" rows="18" spellcheck="false"
-                        oninput="updateSpjPreview()">${esc(p.spj_source||'')}</textarea>
-              <div class="md-preview" id="f_spj_pv" style="padding:0"></div>
-            </div>
-          </div></div>
-          <div class="flex gap8">
-            <button class="btn btn-sm btn-default" onclick="loadSpjTemplate()">载入模板</button>
-            ${p.id?`<button class="btn btn-sm btn-primary" onclick="compileSpj(${p.id})">编译 SPJ</button>`:
-                   '<span class="muted" style="align-self:center">保存题目后可编译</span>'}
-            <span style="align-self:center">${p.spj_compiled?'<span class="badge badge-AC">已编译</span>':'<span class="badge badge-PENDING">未编译</span>'}</span>
-          </div>
-          <div id="spj-log">${p.spj_log?`<div class="spj-log ${p.spj_compiled?'spj-ok':'spj-err'}">${esc(p.spj_log)}</div>`:''}</div>
         </div>
 
-        <h3 style="margin:16px 0 8px;font-size:14px;">题面（支持 Markdown + LaTeX，右侧实时预览）</h3>
-        ${mdField('题目背景（可留空，留空则不显示）','f_bg',p.background)}
-        ${mdField('题目描述','f_desc',p.description)}
-        ${mdField('输入格式','f_in',p.input_format)}
-        ${mdField('输出格式','f_out',p.output_format)}
-        <h3 style="margin:16px 0 8px;font-size:14px;">样例组</h3>
-        <div class="form-hint" style="margin-bottom:8px">
-          每组包含输入与输出，前台会分栏显示并各带「复制」按钮。说明栏支持 Markdown/LaTeX。
+        <!-- 题目正文（支持 Markdown） -->
+        <div class="form-group">
+          <label for="description">题目描述</label>
+          <textarea id="description" name="description" rows="8" class="form-control" 
+                    placeholder="支持 Markdown 与 LaTeX 公式...">{{ problem.description if problem else '' }}</textarea>
         </div>
-        <div id="samples"></div>
-        <button class="btn btn-sm btn-default" onclick="addSample()">+ 添加样例组</button>
-        ${mdField('数据范围与约定','f_cons',p.constraints)}
 
-        <h3 style="margin:16px 0 8px;font-size:14px;">子任务与测试点</h3>
-        <div id="subtasks"></div>
-        <button class="btn btn-sm btn-default" onclick="addSubtask()">+ 添加子任务</button>
-        ${pid?`<button class="btn btn-sm btn-default" onclick="autodetect(${pid})">🔍 从数据目录自动识别</button>`:
-              '<span class="muted" style="margin-left:8px">保存后可上传测试数据并自动识别</span>'}
-
-        <div class="mt10" style="border-top:1px solid #e3e9ef;padding-top:12px;">
-          <button class="btn btn-primary" onclick="saveProblem()">保存题目</button>
-          <a class="btn btn-default" href="/admin">取消</a>
-          <span id="save-msg" class="muted" style="margin-left:10px"></span>
+        <div class="form-group">
+          <label for="input_format">输入格式</label>
+          <textarea id="input_format" name="input_format" rows="4" class="form-control" 
+                    placeholder="说明输入的格式...">{{ problem.input_format if problem else '' }}</textarea>
         </div>
-      </div>
-    </div>`;
-  renderSubtaskEditor();
-  renderSampleEditor();
-  toggleSpj();
-  updateSpjPreview();
-  ['f_bg','f_desc','f_in','f_out','f_cons'].forEach(id=>{
-    const ta=document.getElementById(id);
-    ta.addEventListener('input',()=>updatePreview(id));
-    updatePreview(id);
-  });
-}
 
-function toggleSpj(){
-  const on = document.getElementById('f_checker').value==='spj';
-  document.getElementById('spj-box').style.display = on?'block':'none';
-}
-async function loadSpjTemplate(){
-  const t = await API.get('/api/admin/spj_template');
-  if(!t.testlib_available) toast('警告：data/lib/testlib.h 未找到','error');
-  document.getElementById('f_spj').value = t.template;
-  updateSpjPreview();
-}
-function updateSpjPreview(){
-  const ta = document.getElementById('f_spj');
-  const pv = document.getElementById('f_spj_pv');
-  if(!ta || !pv) return;
-  pv.innerHTML = `<pre class="code-body" style="margin:0;max-height:430px;overflow:auto"><code>${highlightCpp(ta.value)}</code></pre>`;
-}
-async function compileSpj(pid){
-  const box=document.getElementById('spj-log');
-  box.innerHTML='<div class="spj-log">编译中...</div>';
-  try{
-    // save the source first so we compile exactly what is on screen
-    await saveProblem(true);
-    const r = await API.post(`/api/admin/problem/${pid}/compile_spj`,{});
-    box.innerHTML=`<div class="spj-log ${r.ok?'spj-ok':'spj-err'}">${esc(r.log||'(无输出)')}</div>`;
-    toast(r.ok?'SPJ 编译成功':'SPJ 编译失败', r.ok?'success':'error');
-  }catch(e){
-    box.innerHTML=`<div class="spj-log spj-err">${esc(e.message)}</div>`;
-    toast(e.message,'error');
-  }
-}
+        <div class="form-group">
+          <label for="output_format">输出格式</label>
+          <textarea id="output_format" name="output_format" rows="4" class="form-control" 
+                    placeholder="说明输出的格式...">{{ problem.output_format if problem else '' }}</textarea>
+        </div>
 
-function mdField(label,id,val){
-  return `<div class="form-row"><div class="form-group" style="flex:1">
-      <label>${label}</label>
-      <div class="md-split">
-        <textarea id="${id}" rows="8">${esc(val||'')}</textarea>
-        <div class="md-preview problem-body-inner" id="${id}_pv"></div>
-      </div>
-      <span class="form-hint">行内公式 $x^2$ ，行间公式 $$\\sum_{i=1}^n a_i$$</span>
-    </div></div>`;
-}
-function updatePreview(id){
-  document.getElementById(id+'_pv').innerHTML = renderStatement(document.getElementById(id).value);
-}
+        <div class="form-group">
+          <label for="samples">输入输出样例</label>
+          <textarea id="samples" name="samples" rows="6" class="form-control code-font" 
+                    placeholder="### 样例输入 1&#10;```&#10;...&#10;```&#10;### 样例输出 1&#10;```&#10;...&#10;```">{{ problem.samples if problem else '' }}</textarea>
+        </div>
 
-function renderSampleEditor(){
-  if(!Array.isArray(editing.sample_groups)) editing.sample_groups=[];
-  // one-time migration: keep an old free-text sample visible as group 1
-  if(!editing.sample_groups.length && (editing.samples||'').trim()){
-    editing.sample_groups=[{input:editing.samples.trim(),output:'',note:''}];
-  }
-  const gs=editing.sample_groups;
-  document.getElementById('samples').innerHTML = gs.map((g,i)=>`
-    <div class="subtask-editor">
-      <div class="flex-between" style="margin-bottom:6px">
-        <strong style="font-size:13px">样例 ${i+1}</strong>
-        <button class="btn btn-sm btn-danger" onclick="editing.sample_groups.splice(${i},1);renderSampleEditor()">删除</button>
-      </div>
-      <div class="md-split">
-        <div class="form-group"><label>输入</label>
-          <textarea rows="6" spellcheck="false"
-            oninput="editing.sample_groups[${i}].input=this.value">${esc(g.input||'')}</textarea></div>
-        <div class="form-group"><label>输出</label>
-          <textarea rows="6" spellcheck="false"
-            oninput="editing.sample_groups[${i}].output=this.value">${esc(g.output||'')}</textarea></div>
-      </div>
-      <div class="form-group"><label>样例说明（可选）</label>
-        <textarea rows="2" oninput="editing.sample_groups[${i}].note=this.value">${esc(g.note||'')}</textarea></div>
-    </div>`).join('') || '<div class="muted">暂无样例组。</div>';
-}
-function addSample(){
-  editing.sample_groups=editing.sample_groups||[];
-  editing.sample_groups.push({input:'',output:'',note:''});
-  renderSampleEditor();
-}
+        <div class="form-group">
+          <label for="hint">提示 / 说明</label>
+          <textarea id="hint" name="hint" rows="4" class="form-control" 
+                    placeholder="数据范围、提示等...">{{ problem.hint if problem else '' }}</textarea>
+        </div>
 
-function renderSubtaskEditor(){
-  const sts = editing.subtasks||[];
-  document.getElementById('subtasks').innerHTML = sts.map((st,i)=>`
-    <div class="subtask-editor">
-      <div class="form-row" style="margin-bottom:6px">
-        <div class="form-group"><label>子任务 ${i+1} 名称</label>
-          <input type="text" value="${esc(st.name||'')}" onchange="editing.subtasks[${i}].name=this.value"></div>
-        <div class="form-group" style="flex:0 0 110px"><label>分值</label>
-          <input type="number" value="${st.score||0}" onchange="editing.subtasks[${i}].score=parseInt(this.value)||0"></div>
-        <div class="form-group" style="flex:0 0 auto;justify-content:flex-end">
-          <button class="btn btn-sm btn-danger" onclick="editing.subtasks.splice(${i},1);renderSubtaskEditor()">删除</button></div>
-      </div>
-      <div class="form-group"><label>测试点（每行一组：输入文件 输出文件）</label>
-        <textarea rows="${Math.max(2,(st.testcases||[]).length)}"
-          onchange="setCases(${i},this.value)">${(st.testcases||[]).map(c=>`${c.input} ${c.output}`).join('\n')}</textarea></div>
-    </div>`).join('') || '<div class="muted">暂无子任务。无子任务的题目将无法获得分数。</div>';
-}
-function setCases(i,val){
-  editing.subtasks[i].testcases = val.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{
-    const parts=l.split(/\s+/);
-    return {input:parts[0]||'', output:parts[1]||''};
-  });
-}
-function addSubtask(){
-  editing.subtasks = editing.subtasks||[];
-  editing.subtasks.push({name:`Subtask ${editing.subtasks.length+1}`,score:0,testcases:[]});
-  renderSubtaskEditor();
-}
-async function autodetect(pid){
-  try{
-    const r = await API.post(`/api/admin/problem/${pid}/autodetect`,{});
-    editing.subtasks = r.subtasks;
-    renderSubtaskEditor();
-    toast('已识别 '+r.subtasks.length+' 个子任务','success');
-  }catch(e){ toast(e.message,'error'); }
-}
-
-async function saveProblem(quiet){
-  const g=id=>{const e=document.getElementById(id);return e?e.value:'';};
-  const payload={
-    id: editing.id||undefined, slug:g('f_slug'), title:g('f_title'),
-    description:g('f_desc'), input_format:g('f_in'), output_format:g('f_out'),
-    samples:'', sample_groups: JSON.stringify(editing.sample_groups||[]),
-    background:g('f_bg'), constraints:g('f_cons'),
-    time_limit:g('f_tl'), memory_limit:g('f_ml'), problem_type:g('f_type'),
-    score_total:g('f_score'), difficulty:g('f_diff'), is_public:g('f_public'),
-    tags:g('f_tags'), interactive:g('f_inter'),
-    checker_type:g('f_checker'), spj_source:g('f_spj'),
-    subtasks: JSON.stringify(editing.subtasks||[]),
-  };
-  const pos=g('f_pos'); if(pos!=='') payload.position=pos;
-  try{
-    const r=await API.post('/api/admin/problem',payload);
-    if(quiet) return r;
-    toast('保存成功','success');
-    if(!editing.id){                       // newly created -> move to its edit URL
-      history.replaceState(null, '', `/admin/problem/${r.id}`);
-      document.getElementById('ptitle').textContent = `编辑题目 #${r.id}`;
-    }
-    await editProblem(r.id);
-    return r;
-  }catch(e){ toast(e.message,'error'); if(quiet) throw e; }
-}
-
-(async()=>{
-  me = await loadMe();
-  renderLayout(me, 'admin');
-  if(!me || !(me.is_admin || me.is_manager)){
-    document.getElementById('editor').innerHTML =
-      `<div class="card"><div class="card-body">
-        <div class="alert alert-error">需要管理员或出题负责人权限。</div>
-        <a href="/login" class="btn btn-primary">前往登录</a></div></div>`;
-    return;
-  }
-  document.getElementById('ptitle').textContent = PID ? `编辑题目 #${PID}` : '新建题目';
-  await editProblem(PID);
-})();
-</script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2ce2359de8714fe',t:'MTc4NzAyNjk1Mw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+        <!-- 提交与返回 -->
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary btn-lg">{{ "保存修改" if problem else "立即创建" }}</button>
+          <a href="{{ '/problem/' ~ problem.id if problem else '/problems' }}" class="btn btn-outline">取消返回</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</body>
 </html>
