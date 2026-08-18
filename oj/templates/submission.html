@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>提交详情 - OIL OJ</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar">
+      <div class="title" id="ptitle">提交详情</div>
+      <div style="flex:1"></div>
+      <a href="/status" class="btn btn-sm btn-default">← 返回评测状态</a>
+    </div>
+    <div class="content" id="content">
+      <div class="card"><div class="card-body muted">加载中...</div></div>
+    </div>
+  </main>
+</div>
+<script src="/static/vendor/marked/marked.min.js"></script>
+<script src="/static/vendor/katex/katex.min.js"></script>
+<script src="/static/vendor/dompurify/purify.min.js"></script>
+<script src="/static/app.js"></script>
+<script>
+const sid = parseInt(location.pathname.split('/').pop());
+let me = null;
+
+function caseGrid(cases){
+  if(!cases || !cases.length) return '';
+  return '<div style="display:flex;flex-wrap:wrap;gap:4px;margin:8px 0;">' + cases.map(c=>{
+    const col={AC:'#52c41a',WA:'#d83b3b',TLE:'#e67e22',MLE:'#9d3dcf',RE:'#c0392b',SE:'#666'}[c.status]||'#bbb';
+    return `<span title="${esc(c.case||'')} ${esc(c.status)} ${c.time||0}ms"
+      style="width:24px;height:24px;border-radius:3px;background:${col};color:#fff;font-size:10px;
+      display:inline-flex;align-items:center;justify-content:center;">${esc(c.status)}</span>`;
+  }).join('') + '</div>';
+}
+
+async function render(){
+  let s;
+  try{ s = await API.get(`/api/submission/${sid}`); }
+  catch(e){
+    document.getElementById('content').innerHTML =
+      `<div class="card"><div class="card-body"><div class="alert alert-error">${esc(e.message)}</div></div></div>`;
+    document.getElementById('ptitle').textContent = '无法查看';
+    return null;
+  }
+
+  document.getElementById('ptitle').textContent = `提交 #${s.id}`;
+
+  let subtaskHtml = '';
+  if(s.subtask_scores && s.subtask_scores.length){
+    let p = null;
+    try{ p = (await API.get('/api/problem/' + s.problem_id)).problem; }catch(e){}
+    subtaskHtml = '<table><thead><tr><th>子任务</th><th>名称</th><th>得分</th></tr></thead><tbody>' +
+      s.subtask_scores.map((sc,i)=>{
+        const st = (p && p.subtasks && p.subtasks[i]) || {name:'#'+(i+1), score:'?'};
+        const cls = sc>0 ? (sc>=st.score ? 'subtask-ok' : 'subtask-hacked') : 'muted';
+        return `<tr><td class="mono">${i+1}</td><td>${esc(st.name)}</td>
+          <td class="mono ${cls}"><strong>${sc}</strong> / ${st.score}</td></tr>`;
+      }).join('') + '</tbody></table>';
+  }
+
+  let caseHtml = '';
+  if(s.case_results && s.case_results.length){
+    caseHtml = caseGrid(s.case_results) +
+      '<table><thead><tr><th>子任务</th><th>测试点</th><th>结果</th><th>耗时</th></tr></thead><tbody>' +
+      s.case_results.map(c=>`<tr><td class="mono">${c.subtask}</td>
+        <td class="mono">${esc(c.case||'')}</td><td>${statusBadge(c.status)}</td>
+        <td class="mono">${c.time||0} ms</td></tr>`).join('') + '</tbody></table>';
+  }
+
+  document.getElementById('content').innerHTML = `
+    <div class="card">
+      <div class="card-header">提交 #${s.id}</div>
+      <div class="card-body">
+        <div class="problem-meta">
+          <span><strong>提交者：</strong>${esc(s.display_name||'')}</span>
+          <span><strong>题目：</strong><a href="/problem/${s.problem_id}">${esc(s.problem_title||'')}</a></span>
+          <span><strong>语言：</strong>${esc(s.language||'C++20')}</span>
+          <span><strong>提交时间：</strong>${fmtTime(s.created_at)}</span>
+        </div>
+        <div style="margin-top:12px;font-size:16px;">
+          ${statusBadge(s.status, s.score)} &nbsp; 得分：<strong style="font-size:20px;">${s.score}</strong>
+        </div>
+      </div>
+    </div>
+
+    ${s.restricted ? `<div class="card"><div class="card-body">
+        <div class="alert alert-warn">比赛期间不公开他人提交的代码与测试点详情，此处仅显示评测结果。</div>
+      </div></div>` : `
+      ${s.verdict_detail ? `<div class="card"><div class="card-header">编译 / 评测信息</div>
+        <div class="card-body"><pre class="code-body">${esc(s.verdict_detail)}</pre></div></div>` : ''}
+      ${subtaskHtml ? `<div class="card"><div class="card-header">子任务得分</div>${subtaskHtml}</div>` : ''}
+      ${caseHtml ? `<div class="card"><div class="card-header">测试点结果</div>
+        <div class="card-body">${caseHtml}</div></div>` : ''}
+      ${s.code ? `<div class="card"><div class="card-header">源代码</div>
+        <div class="card-body">${cppBlock(s.code, s.language || 'C++20')}</div></div>` : ''}
+    `}`;
+  return s;
+}
+
+(async()=>{
+  me = await loadMe();
+  renderLayout(me, 'status');
+  const s = await render();
+  // Only follow the verdict while it is still being judged.
+  if(s && (s.status === 'PENDING' || s.status === 'JUDGING')){
+    followSubmission(sid, ()=>{}).then(()=>render());
+  }
+})();
+</script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2ce1e411f4fc64b',t:'MTc4NzAyNjc0NA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

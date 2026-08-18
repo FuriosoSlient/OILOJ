@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>题目 - OIL OJ</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar"><div class="title">题目</div></div>
+    <div class="content">
+      <div class="card">
+        <div class="card-header">题目列表</div>
+        <table>
+          <thead><tr><th>#</th><th>标题</th><th>类型</th><th>难度</th><th>出题人</th><th>满分</th><th>时限</th><th>内存</th></tr></thead>
+          <tbody id="list"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+<script>
+const TYPE={personal:['个人题','type-personal','diff-green'],thinking:['思维题','type-thinking','diff-blue'],mystery:['神秘题','type-mystery','diff-purple'],standard:['普通题','','']};
+(async()=>{
+  const me=await loadMe(); renderLayout(me,'problems');
+  const r=await API.get('/api/problems');
+  if(!r.problems.length){
+    document.getElementById('list').innerHTML=
+      '<tr><td colspan="8" class="muted" style="padding:20px">暂无公开题目。比赛题目会在比赛结束后自动公开。</td></tr>';
+    return;
+  }
+  document.getElementById('list').innerHTML=r.problems.map(p=>{
+    const [tname,tcls,dcls]=TYPE[p.problem_type]||['普通题','',''];
+    return `<tr>
+      <td class="mono">${p.id}</td>
+      <td><a href="/problem/${p.id}">${esc(p.title)}</a>
+        ${p.tags?`<span class="muted" style="font-size:11px;margin-left:6px">${esc(p.tags)}</span>`:''}</td>
+      <td><span class="pt-type ${tcls}">${tname}</span></td>
+      <td>${difficultyBadge(p.difficulty,p.difficulty_hidden)||'<span class="muted">-</span>'}</td>
+      <td class="muted" style="font-size:12px">${esc(p.author||'-')}</td>
+      <td class="mono">${p.score_total}</td>
+      <td class="mono">${p.time_limit}ms</td>
+      <td class="mono">${p.memory_limit}MB</td>
+    </tr>`;
+  }).join('');
+})();
+</script>
+</body>
+</html>
