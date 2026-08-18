@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OIL OJ</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar"><div class="title">首页</div></div>
+    <div class="content">
+      <div class="card">
+        <div class="card-body text-center" style="padding:50px 30px;">
+          <div style="font-size:52px;font-weight:800;letter-spacing:2px;background:linear-gradient(135deg,#2f7ed8,#722ed1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:10px;">OIL OJ</div>
+          <div style="font-size:18px;color:#666;margin-bottom:6px;">一个仿 LOJ 的在线评测系统</div>
+          <div style="color:#999;margin-bottom:24px;">GNU C++20 · 本地评测 · OIL 特殊赛制</div>
+          <div class="flex gap12" style="justify-content:center;">
+            <a href="/problems" class="btn btn-primary">浏览题目</a>
+            <a href="/contests" class="btn btn-default">查看比赛</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <div class="card-header">OIL 赛制简介</div>
+          <div class="card-body">
+            <p><strong>两队对抗，每队 5 人。</strong></p>
+            <ul style="padding-left:20px;margin-top:8px;">
+              <li><strong>个人题</strong>：每人 1 道 OI 题，绿题难度，含多个部分分子任务。</li>
+              <li><strong>思维题</strong>：4 道蓝题，每题 50 分，无部分分，可被 Hack。</li>
+              <li><strong>神秘题</strong>：交互题，200 分，禁止 Hack。</li>
+            </ul>
+            <p style="margin-top:12px;">比赛分 <strong>2 小时做题阶段</strong> 与 <strong>1 小时公开 Hack 阶段</strong>。锁题后可与队友交流并解锁团队题。</p>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">Hack 规则</div>
+          <div class="card-body">
+            <p><strong>个人题 Hack（做题阶段）</strong></p>
+            <p style="color:#666;">逐子任务攻击。某子任务被 Hack 成功，对方该子任务得分变为原来的 <strong>40%</strong>，攻击方不得分。</p>
+            <p style="margin-top:12px;"><strong>团队题 Hack（公开 Hack 阶段）</strong></p>
+            <p style="color:#666;">需 Hack 掉对方所有正确做法才算成功。成功后对方失去该题 <strong>70%</strong> 分数，攻击方获得等量分数（真正的"窃取"）。</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+<script>
+(async()=>{ const me = await loadMe(); renderLayout(me,'home'); })();
+</script>
+</body>
+</html>
