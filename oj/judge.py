@@ -233,12 +233,29 @@ def judge_submission(problem, code, hack_input=None, progress=None):
         checker_bin = None
         interactor_bin = None
         if interactive:
-            cand = exe_path(validator_src) if validator_src else None
-            if cand and os.path.exists(cand):
-                interactor_bin = cand  # precompiled binary
-            else:
-                return {"status": "SE", "score": 0, "subtask_scores": [],
-                        "case_results": [], "message": "interactor binary missing"}
+            candidates = []
+            if validator_src:
+                candidates += [Path(validator_src), pdir / validator_src]
+            candidates += [pdir / "interactor", pdir / ("interactor" + EXE)]
+            for c in candidates:
+                c = Path(exe_path(c))
+                if c.exists():
+                    interactor_bin = str(c)
+                    break
+            if not interactor_bin:
+                # last resort: compile spj.cpp as the interactor
+                isrc = pdir / "spj.cpp"
+                idst = pdir / ("interactor" + EXE)
+                if isrc.exists():
+                    okc, errc = compile_cpp(str(isrc), str(idst))
+                    if okc:
+                        interactor_bin = str(idst)
+                    else:
+                        return {"status": "SE", "score": 0, "subtask_scores": [],
+                                "case_results": [], "message": f"interactor 编译失败: {errc}"}
+                else:
+                    return {"status": "SE", "score": 0, "subtask_scores": [],
+                            "case_results": [], "message": "interactor binary missing"}
         else:
             # Special judge: a testlib-based C++ checker stored per problem.
             # It is compiled ahead of time by the admin UI; if the binary is
