@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>登录 - OIL OJ</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar"><div class="title">登录</div></div>
+    <div class="content">
+      <div class="auth-wrap">
+        <div class="card">
+          <div class="logo-big">OIL<span style="color:var(--loj-blue)">OJ</span></div>
+          <div id="err"></div>
+          <form id="f">
+            <div class="form-group">
+              <label>用户名</label>
+              <input type="text" name="username" required autofocus>
+            </div>
+            <div class="form-group">
+              <label>密码</label>
+              <input type="password" name="password" required>
+            </div>
+            <button class="btn btn-primary" style="width:100%;padding:10px;" type="submit">登 录</button>
+          </form>
+          <p class="text-center mt20 muted">还没有账号？<a href="/register">立即注册</a></p>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+<script>
+(async()=>{ const me=await loadMe(); if(me) location.href='/'; renderLayout(me);
+document.getElementById('f').onsubmit=async e=>{
+  e.preventDefault();
+  const fd=new FormData(e.target);
+  try{
+    await API.post('/api/login',{username:fd.get('username'),password:fd.get('password')});
+    location.href='/';
+  }catch(err){
+    document.getElementById('err').innerHTML=`<div class="alert alert-error">${esc(err.message)}</div>`;
+  }
+};
+})();
+</script>
+</body>
+</html>

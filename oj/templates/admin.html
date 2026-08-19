@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>管理后台 - OIL OJ</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar"><div class="title">⚙️ 管理后台</div></div>
+    <div class="content" id="content">
+      <div class="card"><div class="card-body">加载中...</div></div>
+    </div>
+  </main>
+</div>
+
+<script src="/static/vendor/marked/marked.min.js"></script>
+<script src="/static/vendor/katex/katex.min.js"></script>
+<script src="/static/vendor/katex/auto-render.min.js"></script>
+<script src="/static/vendor/dompurify/purify.min.js"></script>
+<script src="/static/app.js"></script>
+<script>
+let me=null, DATA=null, tab='problems', editing=null, ROLE='admin';
+
+const SLOTS = [
+  ...[0,1,2,3,4].map(i=>({key:`personal:${i}`, label:`个人题 P${i+1}（位置 ${i+1}）`})),
+  ...[0,1,2,3,4].map(i=>({key:`team:${i}`, label:`团队思维题 T${i+1}`})),
+  {key:'mystery', label:'神秘题（交互，禁止 Hack）'},
+];
+
+async function reload(){
+  DATA = await API.get('/api/admin/overview');
+  ROLE = DATA.role || 'admin';
+  render();
+}
+
+function render(){
+  let tabs = [['problems','题目管理'],['contests','比赛管理'],['data','测试数据 & SPJ']];
+  if(ROLE==='admin') tabs.splice(2,0,['users','用户与队伍']);
+  if(ROLE==='author') tabs = [['problems','我的题目'],['data','测试数据 & SPJ']];
+  if(!tabs.find(t=>t[0]===tab)) tab=tabs[0][0];
+
+  const nProb=DATA.problems.length;
+  const nSpj=DATA.problems.filter(p=>p.checker_type==='spj').length;
+  const nRun=DATA.contests.filter(c=>c.phase==='solve'||c.phase==='hack').length;
+
+  document.getElementById('content').innerHTML = `
+    <div class="admin-hero">
+      <h2>${ROLE==='admin'?'管理后台':(ROLE==='manager'?'出题负责人工作台':'我的题目')}</h2>
+      <p>${ROLE==='admin'
+          ? '管理题目、比赛、测试数据与队伍分配。'
+          : (ROLE==='manager'
+             ? '你可以创建与编辑题目、上传数据、配置 SPJ；队伍与用户分配由管理员负责。'
+             : '这里只显示你自己创建的题目，你可以编辑它们并上传数据。')}</p>
+      <div class="admin-stats">
+        <div class="admin-stat"><b>${nProb}</b><span>题目</span></div>
+        <div class="admin-stat"><b>${DATA.contests.length}</b><span>比赛</span></div>
+        <div class="admin-stat"><b>${nRun}</b><span>进行中</span></div>
+        <div class="admin-stat"><b>${nSpj}</b><span>SPJ 题目</span></div>
+      </div>
+    </div>
+    ${ROLE==='author' ? `<div class="role-note">
+        你以<strong>出题人</strong>身份登录：仅能查看和编辑<strong>自己创建的题目</strong>，
+        无法管理比赛、队伍或他人的题目。</div>` : ''}
+    ${ROLE==='manager' ? `<div class="role-note">
+        你是 ${DATA.managed_contests.map(id=>'比赛 #'+id).join('、')} 的出题负责人：
+        可以处理题目与数据，但<strong>无法进行分队或用户权限的干涉</strong>。</div>` : ''}
+    <div class="admin-tabs">
+      ${tabs.map(([k,l])=>`<button class="admin-tab ${tab===k?'active':''}" onclick="switchTab('${k}')">${l}</button>`).join('')}
+    </div>
+    <div id="pane"></div>`;
+  ({problems:paneProblems, contests:paneContests, users:paneUsers, data:paneData})[tab]();
+}
+function switchTab(t){ tab=t; editing=null; render(); }
+
+/* ============================ 题目管理 ============================ */
+function paneProblems(){
+  const rows = DATA.problems.map(p=>`
+    <tr>
+      <td class="mono">#${p.id}</td>
+      <td><a href="/problem/${p.id}" target="_blank">${esc(p.title)}</a>
+          <div class="muted mono" style="font-size:11px">${esc(p.slug)}</div></td>
+      <td>${({personal:'个人题',thinking:'思维题',mystery:'神秘题',standard:'普通题'})[p.problem_type]||p.problem_type}</td>
+      <td>${difficultyBadge(p.difficulty,false)||'<span class="muted">-</span>'}</td>
+      <td class="mono">${p.score_total}</td>
+      <td class="mono">${p.subtask_count} / ${p.case_count}</td>
+      <td>${p.is_public?'<span class="badge badge-AC">公开</span>':'<span class="badge badge-PENDING">私有</span>'}
+          ${p.checker_type==='spj'?'<span class="checker-badge">SPJ</span>':''}
+          ${p.interactive?'<span class="checker-badge">交互</span>':''}</td>
+      <td>
+        <button class="btn btn-sm btn-default" onclick="location.href='/admin/problem/${p.id}'">编辑</button>
+        <button class="btn btn-sm btn-danger" onclick="delProblem(${p.id})">删除</button>
+      </td>
+    </tr>`).join('');
+  document.getElementById('pane').innerHTML = `
+    <div class="card">
+      <div class="card-header">题目列表
+        <button class="btn btn-sm btn-primary" style="float:right" onclick="location.href='/admin/problem'">+ 新建题目</button>
+      </div>
+      <table>
+        <thead><tr><th>ID</th><th>标题</th><th>类型</th><th>难度</th><th>满分</th>
+          <th>子任务/测试点</th><th>可见性</th><th>操作</th></tr></thead>
+        <tbody>${rows||'<tr><td colspan="8" class="muted">暂无题目</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div id="editor"></div>`;
+}
+
+async function delProblem(pid){
+  if(!confirm('确定删除题目 #'+pid+'？该题的提交记录也会被删除。')) return;
+  try{ await API.del(`/api/admin/problem/${pid}`); toast('已删除','success'); reload(); }
+  catch(e){ toast(e.message,'error'); }
+}
+
+/* ============================ 比赛管理 ============================ */
+function paneContests(){
+  const rows = DATA.contests.map(c=>`
+    <tr>
+      <td class="mono">#${c.id}</td>
+      <td><a href="/contest/${c.id}" target="_blank">${esc(c.label||c.name)}</a>
+        <div class="muted" style="font-size:11px">${esc(c.name)}</div></td>
+      <td><span class="phase-chip phase-${c.phase}">${phaseLabel(c.phase)}</span></td>
+      <td class="mono" style="font-size:12px">${fmtTime(c.start_time)}</td>
+      <td class="mono">${Math.round(c.solve_duration/60)}′ + ${Math.round(c.hack_duration/60)}′</td>
+      <td class="mono">${c.problems.length}</td>
+      <td>${c.is_published?'已发布':'<span class="muted">草稿</span>'}</td>
+      <td style="font-size:12px">${(c.managers||[]).map(m=>esc(m.display_name)).join('、')||'<span class="muted">—</span>'}</td>
+      <td>
+        ${c.can_edit?`<button class="btn btn-sm btn-default" onclick="editContest(${c.id})">编辑</button>`:''}
+        <button class="btn btn-sm btn-default" onclick="location.href='/contest/${c.id}/standings'">榜单</button>
+        ${ROLE==='admin'?`<button class="btn btn-sm btn-danger" onclick="delContest(${c.id})">删除</button>`:''}
+      </td>
+    </tr>`).join('');
+  document.getElementById('pane').innerHTML=`
+    <div class="card">
+      <div class="card-header">比赛列表
+        ${ROLE==='admin'?'<button class="btn btn-sm btn-primary" style="float:right" onclick="editContest(null)">+ 新建比赛</button>':''}</div>
+      <table>
+        <thead><tr><th>ID</th><th>名称</th><th>阶段</th><th>开始时间</th><th>时长</th>
+          <th>题数</th><th>发布</th><th>负责人</th><th>操作</th></tr></thead>
+        <tbody>${rows||'<tr><td colspan="9" class="muted">暂无比赛</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div id="editor"></div>`;
+}
+
+function localDT(ts){
+  const d = new Date((ts||Date.now()/1000)*1000);
+  const p=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function editContest(cid){
+  const c = cid ? DATA.contests.find(x=>x.id===cid)
+                : {id:null,name:'',label:'',description:'',start_time:Date.now()/1000,
+                   solve_duration:7200,hack_duration:3600,is_published:1,problems:[]};
+  const cur = {}; (c.problems||[]).forEach(p=>cur[p.slot]=p.id);
+  const opts = pid => ['<option value="">— 不设置 —</option>'].concat(
+      DATA.problems.map(p=>`<option value="${p.id}" ${pid===p.id?'selected':''}>#${p.id} ${esc(p.title)} (${p.score_total}分)</option>`)
+    ).join('');
+  document.getElementById('editor').innerHTML=`
+    <div class="card">
+      <div class="card-header">${cid?`编辑比赛 #${cid}`:'新建比赛'}</div>
+      <div class="card-body">
+        <div class="form-row">
+          <div class="form-group"><label>编号标签</label>
+            <input type="text" id="c_label" value="${esc(c.label||'')}" placeholder="比赛 #1"></div>
+          <div class="form-group" style="flex:2"><label>比赛名称</label>
+            <input type="text" id="c_name" value="${esc(c.name||'')}" placeholder="OIL 第一场"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>开始时间</label>
+            <input type="datetime-local" id="c_start" value="${localDT(c.start_time)}"></div>
+          <div class="form-group"><label>做题阶段（分钟）</label>
+            <input type="number" id="c_solve" value="${Math.round(c.solve_duration/60)}"></div>
+          <div class="form-group"><label>Hack 阶段（分钟）</label>
+            <input type="number" id="c_hack" value="${Math.round(c.hack_duration/60)}"></div>
+          <div class="form-group"><label>发布状态</label>
+            <select id="c_pub">
+              <option value="1" ${c.is_published?'selected':''}>已发布（列表可见）</option>
+              <option value="0" ${!c.is_published?'selected':''}>草稿（仅管理员）</option>
+            </select></div>
+        </div>
+        <div class="form-row"><div class="form-group"><label>比赛说明</label>
+          <textarea id="c_desc" rows="3">${esc(c.description||'')}</textarea></div></div>
+
+        ${ROLE==='admin' ? `
+        <h3 style="margin:16px 0 8px;font-size:14px;">比赛负责人</h3>
+        <div class="form-hint" style="margin-bottom:8px">
+          负责人可以创建/编辑题目、上传数据、配置 SPJ，但<strong>不能进行分队或用户权限的干涉</strong>。
+        </div>
+        <div class="form-row"><div class="form-group">
+          <div style="display:flex;flex-wrap:wrap;gap:10px;">
+            ${DATA.users.filter(u=>!u.is_admin).map(u=>`
+              <label class="file-chip" style="cursor:pointer">
+                <input type="checkbox" class="mgr-cb" value="${u.id}"
+                  ${(c.managers||[]).some(m=>m.id===u.id)?'checked':''}>
+                ${esc(u.display_name)} <span class="muted">@${esc(u.username)}</span>
+              </label>`).join('')}
+          </div>
+        </div></div>` : ''}
+
+        <h3 style="margin:16px 0 8px;font-size:14px;">题目配置</h3>
+        <div class="form-hint" style="margin-bottom:8px">
+          比赛开始前所有题目对选手不可见；比赛期间按 OIL 规则可见且隐藏难度；比赛结束后全部公开并公布难度与 Hack 数据。
+        </div>
+        ${SLOTS.map(s=>`
+          <div class="form-row" style="margin-bottom:6px">
+            <div class="form-group" style="flex:0 0 220px;justify-content:center">
+              <label style="font-size:13px;color:#2c3e50">${s.label}</label></div>
+            <div class="form-group"><select id="slot_${s.key.replace(':','_')}">${opts(cur[s.key])}</select></div>
+          </div>`).join('')}
+
+        <div class="mt10" style="border-top:1px solid #e3e9ef;padding-top:12px;">
+          <button class="btn btn-primary" onclick="saveContest(${cid||'null'})">保存比赛</button>
+          <button class="btn btn-default" onclick="document.getElementById('editor').innerHTML=''">取消</button>
+          ${cid?`<button class="btn btn-default" style="float:right" onclick="resetContest(${cid})">重置比赛数据</button>`:''}
+        </div>
+      </div>
+    </div>`;
+}
+
+async function saveContest(cid){
+  const g=id=>document.getElementById(id).value;
+  try{
+    const r=await API.post('/api/admin/contest',{
+      id:cid||undefined, name:g('c_name')||g('c_label')||'未命名比赛', label:g('c_label'),
+      description:g('c_desc'), start_time:g('c_start'),
+      solve_duration:(parseInt(g('c_solve'))||120)*60,
+      hack_duration:(parseInt(g('c_hack'))||60)*60,
+      is_published:g('c_pub'),
+    });
+    const mapping={};
+    SLOTS.forEach(s=>{
+      const v=document.getElementById('slot_'+s.key.replace(':','_')).value;
+      if(v) mapping[s.key]=parseInt(v);
+    });
+    await API.post(`/api/admin/contest/${r.id}/problems`,{mapping:JSON.stringify(mapping)});
+    if(ROLE==='admin'){
+      const ids=[...document.querySelectorAll('.mgr-cb')].filter(x=>x.checked).map(x=>x.value);
+      await API.post(`/api/admin/contest/${r.id}/managers`,{user_ids:ids.join(',')});
+    }
+    toast('比赛已保存','success');
+    await reload(); paneContests();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function delContest(cid){
+  if(!confirm('删除比赛 #'+cid+'？其提交、Hack、榜单记录都会被清除。')) return;
+  try{ await API.del(`/api/admin/contest/${cid}`); toast('已删除','success'); reload(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function resetContest(cid){
+  if(!confirm('重置比赛 #'+cid+'？将清空所有提交/Hack/锁题并把开始时间设为现在。')) return;
+  try{ await API.post(`/api/admin/reset_contest/${cid}`,{}); toast('已重置','success'); reload(); }
+  catch(e){ toast(e.message,'error'); }
+}
+
+/* ============================ 用户与队伍 ============================ */
+function paneUsers(){
+  const teamOpts = uid => ['<option value="">— 无队伍 —</option>'].concat(
+    DATA.teams.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`)).join('');
+  const rows = DATA.users.map(u=>`
+    <tr>
+      <td class="mono">#${u.id}</td>
+      <td>${esc(u.display_name||'')}<div class="muted mono" style="font-size:11px">@${esc(u.username)}</div></td>
+      <td><select id="u_team_${u.id}">${teamOpts(u.id)}</select></td>
+      <td><select id="u_pos_${u.id}">
+        <option value="">—</option>
+        ${[0,1,2,3,4].map(i=>`<option value="${i}" ${u.position===i?'selected':''}>位置 ${i+1}</option>`).join('')}
+      </select></td>
+      <td><input type="checkbox" id="u_admin_${u.id}" ${u.is_admin?'checked':''}></td>
+      <td><button class="btn btn-sm btn-primary" onclick="saveUser(${u.id})">保存</button></td>
+    </tr>`).join('');
+  document.getElementById('pane').innerHTML=`
+    <div class="card">
+      <div class="card-header">队伍</div>
+      <div class="card-body">
+        ${DATA.teams.map(t=>`
+          <span class="file-chip" style="background:${esc(t.color)}22;border-color:${esc(t.color)}">
+            <span style="width:10px;height:10px;border-radius:50%;background:${esc(t.color)};display:inline-block"></span>
+            #${t.id} ${esc(t.name)}
+          </span>`).join('')||'<span class="muted">暂无队伍</span>'}
+        <div class="form-row mt10">
+          <div class="form-group"><label>新建队伍名称</label><input type="text" id="t_name"></div>
+          <div class="form-group" style="flex:0 0 120px"><label>颜色</label>
+            <input type="text" id="t_color" value="#2f7ed8"></div>
+          <div class="form-group" style="flex:0 0 auto;justify-content:flex-end">
+            <button class="btn btn-primary" onclick="saveTeam()">添加队伍</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header">用户分配（队伍 / 位置 / 管理员）</div>
+      <table>
+        <thead><tr><th>ID</th><th>用户</th><th>队伍</th><th>位置</th><th>管理员</th><th>操作</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  // set current team selections (value must be applied after innerHTML)
+  DATA.users.forEach(u=>{
+    const sel=document.getElementById('u_team_'+u.id);
+    if(sel) sel.value = u.team_id==null?'':String(u.team_id);
+  });
+}
+async function saveUser(uid){
+  try{
+    await API.post('/api/admin/user',{
+      id:uid,
+      team_id:document.getElementById('u_team_'+uid).value,
+      position:document.getElementById('u_pos_'+uid).value,
+      is_admin_flag:document.getElementById('u_admin_'+uid).checked?1:0,
+    });
+    toast('已保存','success'); reload();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function saveTeam(){
+  try{
+    await API.post('/api/admin/team',{
+      name:document.getElementById('t_name').value,
+      color:document.getElementById('t_color').value});
+    toast('队伍已添加','success'); reload();
+  }catch(e){ toast(e.message,'error'); }
+}
+
+/* ============================ 测试数据 ============================ */
+function paneData(){
+  document.getElementById('pane').innerHTML=`
+    <div class="card">
+      <div class="card-header">上传测试数据</div>
+      <div class="card-body">
+        <div class="form-row">
+          <div class="form-group"><label>选择题目</label>
+            <select id="d_pid" onchange="loadFiles()">
+              <option value="">— 请选择 —</option>
+              ${DATA.problems.map(p=>`<option value="${p.id}">#${p.id} ${esc(p.title)} (${esc(p.slug)})</option>`).join('')}
+            </select></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>选择 .in / .out 文件（可多选）</label>
+            <input type="file" id="d_files" multiple accept=".in,.out,.ans,.cpp">
+            <span class="form-hint">命名约定：<code>{子任务号}_{测试点号}.in/.out</code>，例如 <code>0_0.in</code>、<code>1_2.out</code>，上传后可一键自动识别子任务</span></div>
+          <div class="form-group" style="flex:0 0 auto;justify-content:flex-end">
+            <button class="btn btn-primary" onclick="uploadData()">上传</button></div>
+        </div>
+        <div id="filelist"></div>
+      </div>
+    </div>`;
+}
+async function loadFiles(){
+  const pid=document.getElementById('d_pid').value;
+  if(!pid){ document.getElementById('filelist').innerHTML=''; return; }
+  const r=await API.get(`/api/admin/problem/${pid}`);
+  const f=r.problem.files||[];
+  document.getElementById('filelist').innerHTML=`
+    <div style="border-top:1px solid #e3e9ef;padding-top:10px;margin-top:6px">
+      <div class="muted" style="margin-bottom:6px">数据目录：<code>${esc(r.problem.data_dir)}</code> · 共 ${f.length} 个文件</div>
+      ${f.map(x=>`<span class="file-chip">${esc(x.name)} <span class="muted">${x.size}B</span>
+        <button onclick="delFile(${pid},'${esc(x.name)}')" title="删除">×</button></span>`).join('')||'<span class="muted">暂无数据文件</span>'}
+      <div class="mt10">
+        <button class="btn btn-sm btn-primary" onclick="autodetectFrom(${pid})">🔍 自动识别子任务</button>
+      </div>
+    </div>`;
+}
+async function uploadData(){
+  const pid=document.getElementById('d_pid').value;
+  if(!pid){ toast('请先选择题目','error'); return; }
+  const files=document.getElementById('d_files').files;
+  if(!files.length){ toast('请选择文件','error'); return; }
+  const fd=new FormData();
+  for(const f of files) fd.append('files',f);
+  try{
+    const r=await API.post(`/api/admin/problem/${pid}/testdata`,fd);
+    toast(`已上传 ${r.saved.length} 个文件`,'success');
+    loadFiles();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function delFile(pid,name){
+  try{ await API.post(`/api/admin/problem/${pid}/delete_file`,{name}); loadFiles(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function autodetectFrom(pid){
+  try{
+    const r=await API.post(`/api/admin/problem/${pid}/autodetect`,{});
+    toast(`已识别 ${r.subtasks.length} 个子任务，共 ${r.subtasks.reduce((a,s)=>a+s.testcases.length,0)} 个测试点`,'success');
+    reload();
+  }catch(e){ toast(e.message,'error'); }
+}
+
+/* ============================ init ============================ */
+(async()=>{
+  me=await loadMe(); renderLayout(me,'admin');
+  if(!me || !(me.is_admin || me.is_manager || me.is_author)){
+    document.getElementById('content').innerHTML=
+      `<div class="card"><div class="card-body">
+        <div class="alert alert-error">需要管理员或出题负责人权限。</div>
+        <a href="/login" class="btn btn-primary">前往登录</a>
+      </div></div>`;
+    return;
+  }
+  reload();
+})();
+</script></body>
+</html>
