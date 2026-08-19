@@ -876,9 +876,10 @@ async def submission_access(db, sub, viewer):
     Contest rules:
       * your own submissions          -> always full detail
       * admin                         -> always full detail
-      * during a running contest      -> teammates' rows appear only once BOTH
+      * during the solve phase        -> teammates' rows appear only once BOTH
                                          you and they have locked; opponents stay
                                          hidden entirely
+      * during the public hack phase  -> contestants may open anyone's source
       * spectators / other users      -> may see the row, never the detail
       * after the contest ends        -> rows public, detail still owner-only
     """
