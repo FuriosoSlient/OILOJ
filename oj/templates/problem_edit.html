@@ -268,6 +268,10 @@ function renderSubtaskEditor(){
       <div class="form-group"><label>测试点（每行一组：输入文件 输出文件）</label>
         <textarea rows="${Math.max(2,(st.testcases||[]).length)}"
           onchange="setCases(${i},this.value)">${(st.testcases||[]).map(c=>`${c.input} ${c.output}`).join('\n')}</textarea></div>
+      <div class="form-group"><label>子任务数据校验器（C++ / testlib，可空）</label>
+        <span class="form-hint">Hack 该子任务时会先跑校验器；不通过则判定为非法数据，不能 Hack。</span>
+        <textarea rows="6" spellcheck="false"
+          onchange="editing.subtasks[${i}].validator=this.value">${esc(st.validator||'')}</textarea></div>
     </div>`).join('') || '<div class="muted">暂无子任务。无子任务的题目将无法获得分数。</div>';
 }
 function setCases(i,val){
@@ -278,7 +282,7 @@ function setCases(i,val){
 }
 function addSubtask(){
   editing.subtasks = editing.subtasks||[];
-  editing.subtasks.push({name:`Subtask ${editing.subtasks.length+1}`,score:0,testcases:[]});
+  editing.subtasks.push({name:`Subtask ${editing.subtasks.length+1}`,score:0,testcases:[],validator:''});
   renderSubtaskEditor();
 }
 async function autodetect(pid){
@@ -320,7 +324,7 @@ async function saveProblem(quiet){
 (async()=>{
   me = await loadMe();
   renderLayout(me, 'admin');
-  if(!me || !(me.is_admin || me.is_manager || me.is_author)){
+  if(!me || !(me.is_admin || me.is_manager)){
     document.getElementById('editor').innerHTML =
       `<div class="card"><div class="card-body">
         <div class="alert alert-error">需要管理员或出题负责人权限。</div>

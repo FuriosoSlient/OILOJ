@@ -201,15 +201,8 @@ async def require_console_access(db, user):
     """
     if is_admin(user):
         return "admin"
-    if not user:
-        raise HTTPException(403, "需要管理员或出题负责人权限")
-    if await managed_contest_ids(db, user):
+    if user and await managed_contest_ids(db, user):
         return "manager"
-    cur = await db.execute(
-        "SELECT 1 FROM problems WHERE author_id=? OR (author<>'' AND author IN (?,?)) LIMIT 1",
-        (user["id"], user["display_name"] or "", user["username"] or ""))
-    if await cur.fetchone():
-        return "author"
     raise HTTPException(403, "需要管理员或出题负责人权限")
 
 
@@ -221,13 +214,9 @@ async def require_problem_owner(db, user, pid):
     """
     if is_admin(user):
         return "admin"
-    if user:
-        p = await fetch_problem(db, pid)
-        if p and is_author(user, p):
-            return "author"
-        if await managed_contest_ids(db, user):
-            return "manager"
-    raise HTTPException(403, "需要管理员、出题负责人或本题作者权限")
+    if user and await managed_contest_ids(db, user):
+        return "manager"
+    raise HTTPException(403, "需要管理员或出题负责人权限")
 
 
 async def require_contest_editor(db, user, cid):
@@ -270,12 +259,10 @@ async def problem_visibility(db, problem, viewer, contest_id=None):
         return {"visible": True, "reveal_difficulty": True, "reveal_hack_data": True,
                 "reason": "admin", "context": "admin"}
 
-    # The author always sees their own problem, even while it is private or bound
-    # to a contest that has not finished — otherwise they could create a problem
-    # and then be locked out of the very thing they just wrote.
-    if is_author(viewer, problem):
+    # 出题负责人可预览全部题目；普通选手不能偷看负责人题库。
+    if viewer and await managed_contest_ids(db, viewer):
         return {"visible": True, "reveal_difficulty": True, "reveal_hack_data": True,
-                "reason": "author", "context": "author"}
+                "reason": "manager", "context": "admin"}
 
     links = await problem_contest_links(db, pid)
 
@@ -303,8 +290,10 @@ async def problem_visibility(db, problem, viewer, contest_id=None):
                 return {"visible": ok, "reveal_difficulty": False, "reveal_hack_data": False,
                         "reason": "" if ok else "你只能查看自己的个人题（锁题后可查看对方同位置个人题）",
                         "context": "contest"}
-            return {"visible": locked, "reveal_difficulty": False, "reveal_hack_data": False,
-                    "reason": "" if locked else "锁题后才能查看团队题", "context": "contest"}
+            # 公开 Hack 阶段未锁题也可看团队题以便提交拿 Hack 资格
+            ok = locked or (phase == "hack" and bool(viewer and viewer["team_id"]))
+            return {"visible": ok, "reveal_difficulty": False, "reveal_hack_data": False,
+                    "reason": "" if ok else "锁题后才能查看团队题", "context": "contest"}
 
     # No explicit contest context. A problem that is scheduled in a not-yet-finished
     # contest stays hidden from the public list even if flagged public, otherwise
@@ -385,28 +374,37 @@ async def compute_oil_state(db, contest, viewer=None):
     viewer_team = viewer["team_id"] if viewer else None
     viewer_pos = viewer["position"] if viewer else None
 
+    hide_names = phase == "before"
+    def pub_title(p):
+        return "" if hide_names else p["title"]
+
     # Build problem list with visibility info for the viewer
     visible_problems = []
     for slot, p in sorted(problems.items()):
         if slot.startswith("personal:"):
             pos = int(slot.split(":")[1])
-            # own personal problem always visible
             is_own = viewer and viewer_pos == pos
-            # can see opponent's personal problem only if viewer locked AND phase in (solve, hack)
-            can_see = bool(is_own or (viewer_locked and phase in ("solve","hack")))
-            can_submit = bool(is_own and not (viewer and viewer["id"] in lock_map) and phase == "solve")
+            can_see = bool(not hide_names and (is_own or (viewer_locked and phase in ("solve","hack"))))
+            # 做题阶段 / 公开 Hack：未锁题可提交自己的个人题；已锁题不能再交
+            can_submit = bool(is_own and not viewer_locked and phase in ("solve", "hack"))
             visible_problems.append({
-                "slot": slot, "id": p["id"], "title": p["title"], "type": p["problem_type"],
+                "slot": slot, "id": p["id"], "title": pub_title(p), "type": p["problem_type"],
                 "score_total": p["score_total"], "position": pos,
                 "visible": can_see, "can_submit": can_submit, "is_own": bool(is_own),
                 "subtasks": p["subtasks"],
             })
         else:
-            # team / mystery problems require viewer locked and phase in solve/hack
-            can_see = bool(viewer_locked and phase in ("solve","hack"))
-            can_submit = bool(can_see and phase == "solve")
+            # 做题阶段锁题后可见；公开 Hack 阶段未锁题也可看（以便提交拿 Hack 资格）
+            can_see = bool(not hide_names and (
+                (viewer_locked and phase in ("solve", "hack"))
+                or (phase == "hack" and viewer and viewer_team)
+            ))
+            can_submit = bool(
+                (can_see and phase == "solve" and viewer_locked)
+                or (phase == "hack" and viewer and viewer_team and not viewer_locked)
+            )
             visible_problems.append({
-                "slot": slot, "id": p["id"], "title": p["title"], "type": p["problem_type"],
+                "slot": slot, "id": p["id"], "title": pub_title(p), "type": p["problem_type"],
                 "score_total": p["score_total"], "visible": can_see, "can_submit": can_submit,
                 "subtasks": p["subtasks"],
             })
@@ -525,6 +523,8 @@ async def compute_oil_state(db, contest, viewer=None):
                 p = problems.get(slot)
                 s = best.get((m["id"], p["id"])) if p else None
                 scored = []
+                if s and int(s.get("locked_submit") or 0) != 1:
+                    s = None
                 if s and s["subtask_scores"]:
                     raw = json.loads(s["subtask_scores"])
                     for i, st in enumerate(p["subtasks"]):
@@ -538,13 +538,21 @@ async def compute_oil_state(db, contest, viewer=None):
                 })
     # team hack: phase hack, target is the other team (any problem they solved that is a thinking problem)
     team_hack_targets = []
-    if viewer and viewer_locked and phase == "hack":
+    if viewer and viewer_team and phase == "hack":
         opp = [t for t in set(m["team_id"] for m in members) if t != viewer_team]
         if opp:
             opp_team = opp[0]
             for slot, p in problems.items():
                 if not slot.startswith("team:"): continue  # mystery not hackable
+                my_best = best.get((viewer["id"], p["id"])) if viewer else None
+                i_ac = bool(my_best and my_best["score"] and my_best["score"] >= p["score_total"])
+                # 已锁题：可 Hack 所有对方已锁提交；未锁题：必须自己先 AC 这题
+                if not (viewer_locked or i_ac):
+                    continue
                 solvers = team_solvers.get((opp_team, p["id"]), [])
+                # 未锁题时交的代码不能被 Hack
+                solvers = [uid for uid in solvers
+                           if int((best.get((uid, p["id"])) or {}).get("locked_submit") or 0) == 1]
                 already = (opp_team, p["id"]) in hacked_team
                 if solvers:
                     codes = []
@@ -580,7 +588,9 @@ async def compute_oil_state(db, contest, viewer=None):
         "locks": {str(k): v for k,v in lock_map.items()},
         "problems": visible_problems,
         "all_problems_summary": [
-            {"slot": slot, "id": p["id"], "title": p["title"], "type": p["problem_type"],
+            {"slot": slot, "id": p["id"],
+             "title": ("" if phase == "before" else p["title"]),
+             "type": p["problem_type"],
              "score_total": p["score_total"]}
             for slot, p in sorted(problems.items())
         ],
@@ -1147,7 +1157,7 @@ async def api_submit(problem_id: int = Form(...), code: str = Form(...), contest
             c = await fetch_contest(db, contest_id)
             if not c: raise HTTPException(404, "比赛不存在")
             phase = contest_phase(c)
-            if phase != "solve":
+            if phase not in ("solve", "hack"):
                 raise HTTPException(403, "当前阶段不能提交")
             slot_for_pid = None
             for slot, pp in c["problems"].items():
@@ -1162,11 +1172,23 @@ async def api_submit(problem_id: int = Form(...), code: str = Form(...), contest
                 if locked:
                     raise HTTPException(403, "你已锁题，不能再提交个人题")
             else:
-                if not locked:
+                if phase == "solve" and not locked:
                     raise HTTPException(403, "未锁题不能查看/提交团队题")
+                if phase == "hack" and locked:
+                    raise HTTPException(403, "公开 Hack 阶段仅未锁题选手可以继续提交")
+        # 没有显式 contest_id 时，自动挂到该题正在进行的比赛，否则榜上分数一直是 0
+        if not contest_id:
+            links = await problem_contest_links(db, problem_id)
+            for lk in links:
+                if contest_phase(lk) in ("solve", "hack"):
+                    contest_id = lk["id"]
+                    break
+        locked_flag = 0
+        if contest_id:
+            locked_flag = 1 if await is_locked(db, contest_id, user["id"]) else 0
         cur = await db.execute(
-            "INSERT INTO submissions(user_id,problem_id,contest_id,code,language,status,created_at) VALUES(?,?,?,?,?,?,?)",
-            (user["id"], problem_id, contest_id, code, "C++20", "PENDING", time.time()))
+            "INSERT INTO submissions(user_id,problem_id,contest_id,code,language,status,created_at,locked_submit) VALUES(?,?,?,?,?,?,?,?)",
+            (user["id"], problem_id, contest_id, code, "C++20", "PENDING", time.time(), locked_flag))
         sid = cur.lastrowid
         await db.commit()
         await JUDGE_QUEUE.put(sid)
@@ -1396,7 +1418,6 @@ async def api_hack(
         elif kind == "team":
             if phase != "hack":
                 raise HTTPException(403, "团队题只能在公开 Hack 阶段 Hack")
-            # target team is the opponent
             tgt = await db.execute("SELECT team_id FROM users WHERE id=?", (target_id,))
             tr = await tgt.fetchone()
             if not tr or tr["team_id"] == user["team_id"]:
@@ -1404,6 +1425,13 @@ async def api_hack(
             p = await fetch_problem(db, problem_id)
             if not p or p["problem_type"] != "thinking":
                 raise HTTPException(403, "只能 Hack 思维题（神秘题禁止 Hack）")
+            if not locked:
+                cur = await db.execute(
+                    "SELECT MAX(score) AS best FROM submissions WHERE user_id=? AND problem_id=? AND contest_id=?",
+                    (user["id"], problem_id, contest_id))
+                row = await cur.fetchone()
+                if not row or (row["best"] or 0) < (p["score_total"] or 0):
+                    raise HTTPException(403, "未锁题需先 AC 该题才能 Hack")
             target_team = tr["team_id"]
             cur = await db.execute(
                 """INSERT INTO hacks(contest_id,attacker_id,target_id,target_team_id,problem_id,kind,subtask_indices,input_data,status,created_at)
@@ -2115,8 +2143,7 @@ def run_hack_sync(hid):
         merged = {"stages": [], "runs": [], "per_member": [], "checker": ""}
         survivor = None
         for idx, row in enumerate(targets):
-            res = evaluate_hack(p, row["code"], h["input_data"],
-                                attacker_code=atk_code if idx == 0 else None)
+            res = evaluate_hack(p, row["code"], h["input_data"], attacker_code=None)
             d = res["detail"]
             if idx == 0:                       # std/attacker stages are shared
                 merged["stages"] = d.get("stages", [])

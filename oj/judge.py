@@ -565,8 +565,38 @@ def _run_one(binp, inp, tl, ml, label):
     }
 
 
+def run_subtask_validator(source: str, hack_input: str, pdir: Path):
+    """Compile and run a testlib-style validator against hack input.
+
+    Exit 0 / _ok => legal for this subtask. Anything else => illegal.
+    """
+    if not (source or "").strip():
+        return True, ""
+    work = Path(tempfile.mkdtemp(prefix="val_"))
+    try:
+        src = work / "val.cpp"
+        out = work / ("val" + EXE)
+        write_text(src, source)
+        ok, log = compile_cpp(str(src), str(out))
+        if not ok:
+            return False, f"子任务校验器编译失败: {log[:300]}"
+        ifi = work / "in.txt"
+        write_text(ifi, hack_input)
+        p = subprocess.run([str(out), str(ifi)], input=hack_input,
+                           capture_output=True, text=True, timeout=10,
+                           encoding="utf-8", errors="replace", cwd=str(pdir))
+        msg = ((p.stderr or "") + (p.stdout or "")).strip()[:400]
+        if p.returncode in (0, 7):
+            return True, msg
+        return False, msg or f"校验器拒绝该数据 (exit {p.returncode})"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
-                  runs=HACK_VICTIM_RUNS):
+                  runs=HACK_VICTIM_RUNS, subtask_indices=None):
     """Full hack pipeline. Returns a dict describing every stage.
 
     verdict: SUCCESS | FAILURE | INVALID | SE

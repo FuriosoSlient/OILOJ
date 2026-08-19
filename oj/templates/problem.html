@@ -124,6 +124,7 @@ async function doSubmit(){
     const r=await API.post('/api/submit',payload);
     document.getElementById('result').innerHTML=`<div class="alert alert-info">提交 #${r.submission_id} 已加入评测队列...</div>`;
     await followSubmission(r.submission_id, s=>{
+      if(s.score!=null) window.__lastScore=s.score;
       if(s.status==='PENDING'||s.status==='JUDGING'){
         const done=(s.case_results||[]).length;
         document.getElementById('result').innerHTML=

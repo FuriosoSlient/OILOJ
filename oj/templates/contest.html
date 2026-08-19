@@ -229,7 +229,7 @@ function renderBoard(s){
       const hacked = m.attacker_gain>0;
       html+=`<div class="team-member ${m.locked?'locked':''}">
         <span class="pos-tag">${m.position+1}</span>
-        <span class="lock-icon">${m.locked?'🔓':'🔒'}</span>
+        <span class="lock-icon">${m.locked?'🔒':'🔓'}</span>
         <span class="member-name">${esc(m.display_name)}</span>
         ${m.attacker_gain>0?`<span class="badge badge-SUCCESS">+${m.attacker_gain} 窃取</span>`:''}
         <span class="member-score">${ps.total}</span>
@@ -241,7 +241,7 @@ function renderBoard(s){
     state.all_problems_summary.filter(p=>p.type!=='personal').forEach(p=>{
       const sc=s.team_problem_score[`${tid}:${p.id}`]||0;
       html+=`<div class="flex-between" style="font-size:13px;padding:3px 0;">
-        <span>${esc(p.title)} <span style="color:#aaa;">(${p.type==='mystery'?'神秘':'思维'})</span></span>
+        <span>${esc(p.title||'???')} <span style="color:#aaa;">(${p.type==='mystery'?'神秘':'思维'})</span></span>
         <strong class="${sc===p.score_total?'subtask-ok':(sc>0?'subtask-hacked':'muted')}">${sc}/${p.score_total}</strong></div>`;
     });
     html+=`</div></div>`;
@@ -286,7 +286,7 @@ function renderProblems(s){
           ${mine?'<span class="badge badge-SUCCESS" style="margin-left:6px;">我的题</span>':''}
           ${lockedOut?'<span class="badge badge-INVALID" style="margin-left:6px;">已锁定</span>':''}
         </div>
-        <div style="margin:8px 0;font-weight:600;font-size:15px;">${canSee?esc(p.title):'??? 未解锁'}</div>
+        <div style="margin:8px 0;font-weight:600;font-size:15px;">${canSee?esc(p.title||'???'):'??? 未解锁'}</div>
         <div class="pt-meta">
           <span>${p.score_total} 分</span>
           ${canSee?`<a href="/problem/${p.id}?contest_id=${cid}">查看/提交 →</a>`:'<span class="muted">锁题后可见对方个人题</span>'}
@@ -498,12 +498,12 @@ async function doPersonalHack(targetId,problemId){
   const input=document.getElementById(`hack-input-${targetId}-${problemId}`).value;
   if(!input.trim()){toast('请输入测试数据','error');return;}
   const res=document.getElementById(`hack-res-${targetId}-${problemId}`);
-  res.innerHTML='<div class="alert alert-info"><span class="live-dot"></span>已提交，正在依次运行 标程 → 你的程序 → 对方程序×5 ...</div>';
+        res.innerHTML='<div class="alert alert-info"><span class="live-dot"></span>已提交，正在运行 校验器 → 标程 → 对方程序 ...</div>';
   try{
     const r=await API.post('/api/hack',{contest_id:cid,target_id:targetId,problem_id:problemId,kind:'personal',subtask_indices:JSON.stringify(idxs),input_data:input});
     await followHack(r.hack_id, h=>{
       if(h.status==='PENDING'||h.status==='JUDGING')
-        res.innerHTML='<div class="alert alert-info"><span class="live-dot"></span>判定中：标程 → 你的程序 → 对方程序×5 ...</div>';
+        res.innerHTML='<div class="alert alert-info"><span class="live-dot"></span>判定中：校验器 → 标程 → 对方程序 ...</div>';
     });
     await showHackReport(r.hack_id, res);
     HACK_REPORTS[res.id] = res.innerHTML;

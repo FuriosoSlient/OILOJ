@@ -137,7 +137,7 @@ function renderDetail(){
   let h=`<table class="standings-table"><thead><tr>
     <th style="text-align:left">选手</th><th>个人题</th><th>Hack 得分</th><th>小计</th>`;
   probs.filter(p=>p.slot!=='' && !p.slot.startsWith('personal:')).forEach(p=>{
-    h+=`<th>${esc(p.title)}<div class="muted" style="font-weight:400;font-size:11px">${p.score_total}分</div></th>`;
+    h+=`<th>${esc(p.title||'???')}<div class="muted" style="font-weight:400;font-size:11px">${p.score_total}分</div></th>`;
   });
   h+=`</tr></thead><tbody>`;
   S.teams.forEach(t=>{

@@ -73,7 +73,7 @@ async function load(){
 setInterval(load, 10000);
 (async()=>{
   me=await loadMe(); renderLayout(me,'contests');
-  if(me&&(me.is_admin||me.is_manager||me.is_author)) document.getElementById('admin-btn').style.display='inline-block';
+  if(me&&(me.is_admin||me.is_manager)) document.getElementById('admin-btn').style.display='inline-block';
   load();
 })();
 </script>

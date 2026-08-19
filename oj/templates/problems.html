@@ -34,10 +34,15 @@ const TYPE={personal:['个人题','type-personal','diff-green'],thinking:['思�
   }
   document.getElementById('list').innerHTML=r.problems.map(p=>{
     const [tname,tcls,dcls]=TYPE[p.problem_type]||['普通题','',''];
-    return `<tr>
+    const att = p.attempt==='ac' ? '<span class="pl-dot ac" title="已通过">●</span>'
+              : p.attempt==='tried' ? '<span class="pl-dot tried" title="已尝试未通过">●</span>'
+              : '<span class="pl-dot none" title="未做过">○</span>';
+    const showTags = p.tags && !p.difficulty_hidden;
+    return `<tr class="pl-row ${p.attempt||'none'}">
+      <td class="pl-status">${att}</td>
       <td class="mono">${p.id}</td>
       <td><a href="/problem/${p.id}">${esc(p.title)}</a>
-        ${p.tags?`<span class="muted" style="font-size:11px;margin-left:6px">${esc(p.tags)}</span>`:''}</td>
+        ${showTags?`<span class="muted" style="font-size:11px;margin-left:6px">${esc(p.tags)}</span>`:''}</td>
       <td><span class="pt-type ${tcls}">${tname}</span></td>
       <td>${difficultyBadge(p.difficulty,p.difficulty_hidden)||'<span class="muted">-</span>'}</td>
       <td class="muted" style="font-size:12px">${esc(p.author||'-')}</td>

@@ -392,7 +392,7 @@ async function autodetectFrom(pid){
 /* ============================ init ============================ */
 (async()=>{
   me=await loadMe(); renderLayout(me,'admin');
-  if(!me || !(me.is_admin || me.is_manager || me.is_author)){
+  if(!me || !(me.is_admin || me.is_manager)){
     document.getElementById('content').innerHTML=
       `<div class="card"><div class="card-body">
         <div class="alert alert-error">需要管理员或出题负责人权限。</div>

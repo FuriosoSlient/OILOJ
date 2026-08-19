@@ -202,7 +202,7 @@ function renderLayout(user, active){
     <div class="user-box">
       <a href="/login">登录</a> · <a href="/register">注册</a>
     </div>`;
-  const canManage = user && (user.is_admin || user.is_manager || user.is_author);
+  const canManage = user && (user.is_admin || user.is_manager);
   const adminNav = canManage ? `
       <div class="nav-sep">管理</div>
       <a href="/admin" class="${active==='admin'?'active':''}">⚙️ 管理后台</a>` : '';
@@ -222,7 +222,7 @@ function renderLayout(user, active){
 // ---------------------------------------------------------------------------
 // Floating "管理后台" button, rendered on every page for admins/managers.
 function renderAdminFab(user, active){
-  if(!user || !(user.is_admin || user.is_manager || user.is_author) || active==='admin') return;
+  if(!user || !(user.is_admin || user.is_manager) || active==='admin') return;
   if(document.getElementById('admin-fab')) return;
   const a=document.createElement('a');
   a.id='admin-fab'; a.href='/admin'; a.className='admin-fab';
