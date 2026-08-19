@@ -547,10 +547,21 @@ async def compute_oil_state(db, contest, viewer=None):
                 solvers = team_solvers.get((opp_team, p["id"]), [])
                 already = (opp_team, p["id"]) in hacked_team
                 if solvers:
+                    codes = []
+                    for uid in solvers:
+                        s = best.get((uid, p["id"]))
+                        m = next((x for x in members if x["id"] == uid), None)
+                        codes.append({
+                            "user_id": uid,
+                            "display_name": m["display_name"] if m else str(uid),
+                            "submission_id": s["id"] if s else None,
+                            "score": s["score"] if s else 0,
+                        })
                     team_hack_targets.append({
                         "problem_id": p["id"], "problem_title": p["title"],
                         "score_total": p["score_total"],
-                        "solvers": [m["display_name"] for m in members if m["id"] in solvers],
+                        "solvers": [c["display_name"] for c in codes],
+                        "solver_subs": codes,
                         "hacked": already,
                     })
 
@@ -886,7 +897,14 @@ async def submission_access(db, sub, viewer):
         return True, False
     phase = contest_phase(c)
 
-    if phase in ("solve", "hack"):
+    if phase == "hack":
+        # Public hack: contestants may open anyone's source to craft tests.
+        # Spectators still only see the verdict row.
+        if viewer and viewer["team_id"]:
+            return True, True
+        return True, False
+
+    if phase == "solve":
         if not viewer:
             return True, False                     # anonymous spectator
         owner = await db.execute("SELECT team_id FROM users WHERE id=?", (sub["user_id"],))
