@@ -294,18 +294,31 @@ function addClassicSlot(){ window._classicSlots.push(null); renderClassicSlots()
 async function saveContest(cid){
   const g=id=>document.getElementById(id).value;
   try{
+    const mode=g('c_mode')||'oil';
+    const hackEl=document.getElementById('c_hack');
     const r=await API.post('/api/admin/contest',{
       id:cid||undefined, name:g('c_name')||g('c_label')||'未命名比赛', label:g('c_label'),
       description:g('c_desc'), start_time:g('c_start'),
       solve_duration:(parseInt(g('c_solve'))||120)*60,
-      hack_duration:(parseInt(g('c_hack'))||60)*60,
+      hack_duration: mode==='oil' ? ((parseInt(hackEl&&hackEl.value)||60)*60) : 0,
       is_published:g('c_pub'),
+      mode,
+      is_rated: document.getElementById('c_rated') ? g('c_rated') : 0,
     });
     const mapping={};
-    SLOTS.forEach(s=>{
-      const v=document.getElementById('slot_'+s.key.replace(':','_')).value;
-      if(v) mapping[s.key]=parseInt(v);
-    });
+    if(mode==='oil'){
+      SLOTS.forEach(s=>{
+        const el=document.getElementById('slot_'+s.key.replace(':','_'));
+        const v=el&&el.value;
+        if(v) mapping[s.key]=parseInt(v);
+      });
+    }else{
+      const n=(window._classicSlots||[]).length;
+      for(let i=0;i<n;i++){
+        const el=document.getElementById('cslot_'+i);
+        if(el&&el.value) mapping['p'+i]=parseInt(el.value);
+      }
+    }
     await API.post(`/api/admin/contest/${r.id}/problems`,{mapping:JSON.stringify(mapping)});
     if(ROLE==='admin'){
       const ids=[...document.querySelectorAll('.mgr-cb')].filter(x=>x.checked).map(x=>x.value);

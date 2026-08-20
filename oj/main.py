@@ -2240,13 +2240,12 @@ async def admin_save_contest(
         md = (mode or "oil").lower()
         if md not in ("oil", "ioi", "icpc"):
             md = "oil"
-        rated = 1 if (is_admin(user) and is_rated) else 0
+        rated = 1 if (is_admin(user) and int(is_rated or 0)) else 0
         if id and not is_admin(user):
             prev = await fetch_contest(db, id)
             rated = int(prev.get("is_rated") or 0) if prev else 0
-        if md in ("ioi", "icpc") and hack_duration:
-            # IOI/ICPC have a single contest window; keep hack_duration at 0 unless OIL.
-            pass
+        if md in ("ioi", "icpc"):
+            hack_duration = 0
         if id:
             await db.execute(
                 "UPDATE contests SET name=?,label=?,description=?,start_time=?,"
