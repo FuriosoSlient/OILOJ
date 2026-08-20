@@ -1256,17 +1256,19 @@ def contest_mode(contest):
 
 async def contest_roster(db, cid):
     """Per-contest members. Falls back to the legacy global team assignment."""
-    cur = await db.execute(
-        "SELECT u.id, u.username, u.display_name, u.is_admin, u.rating, "
-        "cm.position AS position, cm.team_id AS team_id, "
-        "t.name AS team_name, t.color AS team_color "
-        "FROM contest_members cm "
-        "JOIN users u ON u.id=cm.user_id "
-        "LEFT JOIN contest_teams t ON t.id=cm.team_id "
-        "WHERE cm.contest_id=? ORDER BY t.id, cm.position, u.id", (cid,))
-    rows = [dict(r) for r in await cur.fetchall()]
-    if rows:
-        return rows
+    try:
+        cur = await db.execute(
+            "SELECT u.*, cm.position AS position, cm.team_id AS team_id, "
+            "t.name AS team_name, t.color AS team_color "
+            "FROM contest_members cm "
+            "JOIN users u ON u.id=cm.user_id "
+            "LEFT JOIN contest_teams t ON t.id=cm.team_id "
+            "WHERE cm.contest_id=? ORDER BY t.id, cm.position, u.id", (cid,))
+        rows = [dict(r) for r in await cur.fetchall()]
+        if rows:
+            return rows
+    except Exception:
+        pass
     cur = await db.execute(
         "SELECT u.*, t.name as team_name, t.color as team_color FROM users u "
         "LEFT JOIN teams t ON t.id=u.team_id WHERE u.team_id IS NOT NULL "
@@ -1279,13 +1281,16 @@ async def apply_contest_roster(db, user, cid):
     if not user:
         return user
     u = dict(user)
-    cur = await db.execute(
-        "SELECT team_id, position FROM contest_members WHERE contest_id=? AND user_id=?",
-        (cid, user["id"]))
-    r = await cur.fetchone()
-    if r:
-        u["team_id"] = r["team_id"]
-        u["position"] = r["position"]
+    try:
+        cur = await db.execute(
+            "SELECT team_id, position FROM contest_members WHERE contest_id=? AND user_id=?",
+            (cid, user["id"]))
+        r = await cur.fetchone()
+        if r:
+            u["team_id"] = r["team_id"]
+            u["position"] = r["position"]
+    except Exception:
+        pass
     return u
 
 
@@ -2424,18 +2429,27 @@ async def api_user_profile(uid: int, user=Depends(current_user)):
     db = await get_db()
     try:
         cur = await db.execute(
-            "SELECT id, username, display_name, is_admin, rating, created_at FROM users WHERE id=?",
+            "SELECT id, username, display_name, is_admin, created_at FROM users WHERE id=?",
             (uid,))
         u = await cur.fetchone()
         if not u:
             raise HTTPException(404, "用户不存在")
         d = dict(u)
-        d["rating"] = int(d.get("rating") or 1500)
-        cur = await db.execute(
-            "SELECT rh.*, c.name AS contest_name, c.label AS contest_label, c.mode "
-            "FROM rating_history rh LEFT JOIN contests c ON c.id=rh.contest_id "
-            "WHERE rh.user_id=? ORDER BY rh.id", (uid,))
-        hist = [dict(r) for r in await cur.fetchall()]
+        try:
+            cur = await db.execute("SELECT rating FROM users WHERE id=?", (uid,))
+            rr = await cur.fetchone()
+            d["rating"] = int((rr["rating"] if rr and rr["rating"] is not None else 1500))
+        except Exception:
+            d["rating"] = 1500
+        hist = []
+        try:
+            cur = await db.execute(
+                "SELECT rh.*, c.name AS contest_name, c.label AS contest_label, c.mode "
+                "FROM rating_history rh LEFT JOIN contests c ON c.id=rh.contest_id "
+                "WHERE rh.user_id=? ORDER BY rh.id", (uid,))
+            hist = [dict(r) for r in await cur.fetchall()]
+        except Exception:
+            hist = []
         cur = await db.execute(
             "SELECT s.id, s.problem_id, p.title AS problem_title, s.status, s.score, s.created_at, s.contest_id "
             "FROM submissions s JOIN problems p ON p.id=s.problem_id "
@@ -2755,5 +2769,4 @@ if __name__ == "__main__":
 
 # NOTE: two handlers used to live below this point — after uvicorn.run(), so they
 # were never registered. They also called get_current_user()/db.get_problem(),
-# neither of which exists here. Problem creation/editing goes through
-# POST /api/admin/
+# neit

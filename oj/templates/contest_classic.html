@@ -60,8 +60,12 @@ function render(){
     </div>`;
 }
 async function load(){
-  C=await API.get(`/api/contest/${cid}`);
-  render();
+  try{
+    C=await API.get(`/api/contest/${cid}`);
+    render();
+  }catch(e){
+    document.getElementById('app').innerHTML=`<div class="alert alert-error">${esc(e.message)}</div>`;
+  }
 }
 function connect(){
   if(evt) evt.close();

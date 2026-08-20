@@ -207,6 +207,9 @@ MIGRATIONS = [
     ("hacks",    "attacker_submission_id", "INTEGER"),
     ("problems", "std_source",   "TEXT DEFAULT ''"),
     ("submissions", "locked_submit", "INTEGER DEFAULT 1"),
+    ("users", "rating", "INTEGER DEFAULT 1500"),
+    ("contests", "is_rated", "INTEGER DEFAULT 0"),
+    ("contests", "rating_applied", "INTEGER DEFAULT 0"),
 ]
 
 
