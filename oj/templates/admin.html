@@ -91,8 +91,10 @@ function paneProblems(){
           ${p.checker_type==='spj'?'<span class="checker-badge">SPJ</span>':''}
           ${p.interactive?'<span class="checker-badge">交互</span>':''}</td>
       <td>
-        <button class="btn btn-sm btn-default" onclick="location.href='/admin/problem/${p.id}'">编辑</button>
-        <button class="btn btn-sm btn-danger" onclick="delProblem(${p.id})">删除</button>
+        ${p.can_edit!==false
+          ? `<button class="btn btn-sm btn-default" onclick="location.href='/admin/problem/${p.id}'">编辑</button>
+             <button class="btn btn-sm btn-danger" onclick="delProblem(${p.id})">删除</button>`
+          : '<span class="muted">只读</span>'}
       </td>
     </tr>`).join('');
   document.getElementById('pane').innerHTML = `

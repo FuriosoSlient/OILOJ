@@ -214,9 +214,17 @@ async def require_problem_owner(db, user, pid):
     """
     if is_admin(user):
         return "admin"
+<<<<<<< HEAD
     if user and await managed_contest_ids(db, user):
         return "manager"
     raise HTTPException(403, "需要管理员或出题负责人权限")
+=======
+    if user:
+        p = await fetch_problem(db, pid)
+        if p and is_author(user, p):
+            return "author"
+    raise HTTPException(403, "只能编辑自己创建的题目")
+>>>>>>> a6c4a19 (Stop post-contest chart growth and tighten manager rights)
 
 
 async def require_contest_editor(db, user, cid):
@@ -259,10 +267,10 @@ async def problem_visibility(db, problem, viewer, contest_id=None):
         return {"visible": True, "reveal_difficulty": True, "reveal_hack_data": True,
                 "reason": "admin", "context": "admin"}
 
-    # 出题负责人可预览全部题目；普通选手不能偷看负责人题库。
-    if viewer and await managed_contest_ids(db, viewer):
+    # 作者只能看见自己的题（含未公开），看不到别人的私有题。
+    if is_author(viewer, problem):
         return {"visible": True, "reveal_difficulty": True, "reveal_hack_data": True,
-                "reason": "manager", "context": "admin"}
+                "reason": "author", "context": "author"}
 
     links = await problem_contest_links(db, pid)
 
@@ -751,8 +759,7 @@ async def api_login(username: str = Form(...), password: str = Form(...)):
         cur = await db.execute("SELECT * FROM users WHERE username=?", (username,))
         u = await cur.fetchone()
         if not u or not verify_password(password, u["password_hash"]):
-            raise HTTPException(401, "用户名或密码错误")
-        token = await create_session(db, u["id"])
+            raise HTTPException(401, "用 await create_session(db, u["id"])
         resp = JSONResponse({"ok": True, "user": {"id": u["id"], "username": u["username"], "display_name": u["display_name"], "is_admin": bool(u["is_admin"])}})
         resp.set_cookie("oj_token", token, httponly=True, samesite="lax", max_age=7*86400)
         return resp
@@ -1221,6 +1228,10 @@ async def api_contests(user=Depends(current_user)):
         await db.close()
 
 
+def contest_end_ts(contest):
+    return contest["start_time"] + contest["solve_duration"] + contest["hack_duration"]
+
+
 async def record_snapshot(db, contest, state):
     """Append a scoreboard sample, used to draw the score-over-time chart."""
     cid = contest["id"]
@@ -1252,21 +1263,24 @@ async def api_standings(cid: int, user=Depends(current_user)):
         c = await fetch_contest(db, cid)
         if not c: raise HTTPException(404)
         state = await compute_oil_state(db, c, user)
+        end_ts = contest_end_ts(c)
         cur = await db.execute(
-            "SELECT ts,payload FROM score_snapshots WHERE contest_id=? ORDER BY ts", (cid,))
+            "SELECT ts,payload FROM score_snapshots WHERE contest_id=? AND ts<=? ORDER BY ts",
+            (cid, end_ts + 0.5))
         series = []
         for r in await cur.fetchall():
             try:
                 series.append({"ts": r["ts"], **json.loads(r["payload"])})
             except Exception:
                 pass
-        # always include the current moment as the final point
-        series.append({
-            "ts": time.time(),
-            "teams": {str(k): v for k, v in state["team_totals"].items()},
-            "users": {str(m["id"]): m["personal_total"] + m["attacker_gain"]
-                      for m in state["members"]},
-        })
+        # 比赛进行中才补「此刻」；结束后折线停在最后一次有效采样
+        if state["phase"] in ("solve", "hack"):
+            series.append({
+                "ts": time.time(),
+                "teams": {str(k): v for k, v in state["team_totals"].items()},
+                "users": {str(m["id"]): m["personal_total"] + m["attacker_gain"]
+                          for m in state["members"]},
+            })
         teams = {}
         for m in state["members"]:
             teams.setdefault(m["team_id"], {
@@ -1495,9 +1509,11 @@ async def admin_overview(user=Depends(current_user)):
         problems = []
         for r in await cur.fetchall():
             d = dict(r)
-            # A plain author only manages their own problems.
-            if role == "author" and not is_author(user, d):
-                continue
+            mine = is_author(user, d)
+            public = bool(d.get("is_public"))
+            if role != "admin":
+                if not mine and not public:
+                    continue
             sts = json.loads(d["subtasks"] or "[]")
             d["subtask_count"] = len(sts)
             d["case_count"] = sum(len(st.get("testcases", [])) for st in sts)
@@ -1505,12 +1521,15 @@ async def admin_overview(user=Depends(current_user)):
             for k in ("description", "background", "input_format", "output_format",
                       "samples", "sample_groups", "constraints"):
                 d.pop(k, None)
+            d["can_edit"] = (role == "admin") or mine
             problems.append(d)
 
         cur = await db.execute("SELECT * FROM contests ORDER BY id")
         contests = []
         for r in await cur.fetchall():
             c = dict(r)
+            if role != "admin" and c["id"] not in managed:
+                continue
             c["phase"] = contest_phase(c)
             cur2 = await db.execute(
                 "SELECT cp.slot, p.id, p.title, p.problem_type, p.score_total "
@@ -2228,3 +2247,4 @@ if __name__ == "__main__":
 # were never registered. They also called get_current_user()/db.get_problem(),
 # neither of which exists here. Problem creation/editing goes through
 # POST /api/admin/problem (see the admin section above).
+problem (see the admin section above).

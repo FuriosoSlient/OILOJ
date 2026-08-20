@@ -176,11 +176,12 @@ async function refresh(){
 }
 
 setInterval(()=>{
-  if(S && (S.phase==='solve'||S.phase==='hack')){
+  if(!S) return;
+  if(S.phase==='solve'||S.phase==='hack'){
     S.remaining=Math.max(0,S.remaining-1);
     document.getElementById('clock').textContent=fmtClock(S.remaining);
+    if(++tick%5===0) refresh();
   }
-  if(++tick%5===0) refresh();
 },1000);
 
 window.addEventListener('resize',()=>{ if(S) draw(); });
