@@ -2241,5 +2241,4 @@ if __name__ == "__main__":
 # NOTE: two handlers used to live below this point — after uvicorn.run(), so they
 # were never registered. They also called get_current_user()/db.get_problem(),
 # neither of which exists here. Problem creation/editing goes through
-# POST /api/admin/problem (see the admin section above).
-problem (see the admin section above).
+# POST /api/admin/
