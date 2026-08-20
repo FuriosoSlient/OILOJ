@@ -98,8 +98,27 @@ async function render(){
         <div class="card-body">${caseHtml}</div></div>` : ''}
       ${s.code ? `<div class="card"><div class="card-header">源代码</div>
         <div class="card-body">${cppBlock(s.code, s.language || 'C++20')}</div></div>` : ''}
-    `}`;
+    `}
+    ${(me && s.user_id!==me.id && s.code) ? `<div class="card">
+      <div class="card-header">Hack 该提交</div>
+      <div class="card-body">
+        <p class="muted">不需要自己通过该题。数据须能被标程通过；若该提交在此数据上失败，将新增一个 0 分子任务保存 Hack 数据。</p>
+        <textarea id="hack_in" rows="8" placeholder="输入 Hack 数据"></textarea>
+        <div class="mt10"><button class="btn btn-primary" onclick="doHackSub()">提交 Hack</button></div>
+        <div id="hack_res"></div>
+      </div></div>` : ''}`;
   return s;
+}
+async function doHackSub(){
+  const input=document.getElementById('hack_in').value;
+  const box=document.getElementById('hack_res');
+  box.innerHTML='判定中…';
+  try{
+    const r=await API.post(`/api/submission/${sid}/hack`,{input_data:input});
+    followHack(r.hack_id, h=>{
+      box.innerHTML=`${hackBadge(h.status)} ${esc(h.message||'')}`;
+    }).then(h=>showHackReport(r.hack_id, box));
+  }catch(e){ box.innerHTML=`<div class="alert alert-error">${esc(e.message)}</div>`; }
 }
 
 (async()=>{

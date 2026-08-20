@@ -126,7 +126,8 @@ function paneContests(){
         <div class="muted" style="font-size:11px">${esc(c.name)}</div></td>
       <td><span class="phase-chip phase-${c.phase}">${phaseLabel(c.phase)}</span></td>
       <td class="mono" style="font-size:12px">${fmtTime(c.start_time)}</td>
-      <td class="mono">${Math.round(c.solve_duration/60)}′ + ${Math.round(c.hack_duration/60)}′</td>
+      <td><span class="badge">${(c.mode||'oil').toUpperCase()}</span>${c.is_rated?' <span class="badge badge-AC">Rated</span>':''}</td>
+      <td class="mono">${Math.round(c.solve_duration/60)}′${(c.mode||'oil')==='oil'?' + '+Math.round(c.hack_duration/60)+'′':''}</td>
       <td class="mono">${c.problems.length}</td>
       <td>${c.is_published?'已发布':'<span class="muted">草稿</span>'}</td>
       <td style="font-size:12px">${(c.managers||[]).map(m=>esc(m.display_name)).join('、')||'<span class="muted">—</span>'}</td>
@@ -141,9 +142,9 @@ function paneContests(){
       <div class="card-header">比赛列表
         ${ROLE==='admin'?'<button class="btn btn-sm btn-primary" style="float:right" onclick="editContest(null)">+ 新建比赛</button>':''}</div>
       <table>
-        <thead><tr><th>ID</th><th>名称</th><th>阶段</th><th>开始时间</th><th>时长</th>
+        <thead><tr><th>ID</th><th>名称</th><th>阶段</th><th>开始时间</th><th>赛制</th><th>时长</th>
           <th>题数</th><th>发布</th><th>负责人</th><th>操作</th></tr></thead>
-        <tbody>${rows||'<tr><td colspan="9" class="muted">暂无比赛</td></tr>'}</tbody>
+        <tbody>${rows||'<tr><td colspan="10" class="muted">暂无比赛</td></tr>'}</tbody>
       </table>
     </div>
     <div id="editor"></div>`;
@@ -158,11 +159,12 @@ function localDT(ts){
 function editContest(cid){
   const c = cid ? DATA.contests.find(x=>x.id===cid)
                 : {id:null,name:'',label:'',description:'',start_time:Date.now()/1000,
-                   solve_duration:7200,hack_duration:3600,is_published:1,problems:[]};
+                   solve_duration:7200,hack_duration:3600,is_published:1,mode:'oil',is_rated:0,problems:[],roster:[],contest_teams:[]};
   const cur = {}; (c.problems||[]).forEach(p=>cur[p.slot]=p.id);
   const opts = pid => ['<option value="">— 不设置 —</option>'].concat(
       DATA.problems.map(p=>`<option value="${p.id}" ${pid===p.id?'selected':''}>#${p.id} ${esc(p.title)} (${p.score_total}分)</option>`)
     ).join('');
+  const mode = c.mode||'oil';
   document.getElementById('editor').innerHTML=`
     <div class="card">
       <div class="card-header">${cid?`编辑比赛 #${cid}`:'新建比赛'}</div>
@@ -174,11 +176,22 @@ function editContest(cid){
             <input type="text" id="c_name" value="${esc(c.name||'')}" placeholder="OIL 第一场"></div>
         </div>
         <div class="form-row">
+          <div class="form-group"><label>赛制</label>
+            <select id="c_mode" onchange="toggleModeFields()">
+              <option value="oil" ${mode==='oil'?'selected':''}>OIL（对抗 / 锁题 / Hack）</option>
+              <option value="ioi" ${mode==='ioi'?'selected':''}>IOI（个人部分分）</option>
+              <option value="icpc" ${mode==='icpc'?'selected':''}>ICPC（过题+罚时）</option>
+            </select></div>
+          ${ROLE==='admin'?`<div class="form-group"><label>Rating</label>
+            <select id="c_rated">
+              <option value="0" ${!c.is_rated?'selected':''}>Unrated</option>
+              <option value="1" ${c.is_rated?'selected':''}>Rated（结束后按成绩更新 Rating）</option>
+            </select></div>`:''}
           <div class="form-group"><label>开始时间</label>
             <input type="datetime-local" id="c_start" value="${localDT(c.start_time)}"></div>
-          <div class="form-group"><label>做题阶段（分钟）</label>
+          <div class="form-group"><label>比赛时长（分钟）</label>
             <input type="number" id="c_solve" value="${Math.round(c.solve_duration/60)}"></div>
-          <div class="form-group"><label>Hack 阶段（分钟）</label>
+          <div class="form-group" id="hack-dur-wrap"><label>Hack 阶段（分钟，仅 OIL）</label>
             <input type="number" id="c_hack" value="${Math.round(c.hack_duration/60)}"></div>
           <div class="form-group"><label>发布状态</label>
             <select id="c_pub">
@@ -205,7 +218,8 @@ function editContest(cid){
           </div>
         </div></div>` : ''}
 
-        <h3 style="margin:16px 0 8px;font-size:14px;">题目配置</h3>
+        <div id="oil-slots">
+        <h3 style="margin:16px 0 8px;font-size:14px;">题目配置（OIL 槽位）</h3>
         <div class="form-hint" style="margin-bottom:8px">
           比赛开始前所有题目对选手不可见；比赛期间按 OIL 规则可见且隐藏难度；比赛结束后全部公开并公布难度与 Hack 数据。
         </div>
@@ -215,6 +229,30 @@ function editContest(cid){
               <label style="font-size:13px;color:#2c3e50">${s.label}</label></div>
             <div class="form-group"><select id="slot_${s.key.replace(':','_')}">${opts(cur[s.key])}</select></div>
           </div>`).join('')}
+        </div>
+        <div id="classic-slots" style="display:none">
+        <h3 style="margin:16px 0 8px;font-size:14px;">题目列表（IOI / ICPC，按 A、B、C…）</h3>
+        <div id="classic-list"></div>
+        <button type="button" class="btn btn-sm btn-default" onclick="addClassicSlot()">+ 添加题目</button>
+        </div>
+        ${ROLE==='admin' && cid ? `
+        <h3 style="margin:16px 0 8px;font-size:14px;">本场参赛名单 / 随机分队</h3>
+        <div class="form-hint">OIL 需要 10 人随机分成红/蓝两队各 5 人并分配位置 1–5。每场比赛独立分队，不影响其他场。</div>
+        <div class="form-row"><div class="form-group">
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+            ${DATA.users.map(u=>`
+              <label class="file-chip" style="cursor:pointer">
+                <input type="checkbox" class="roster-cb" value="${u.id}"
+                  ${(c.roster||[]).some(m=>m.user_id===u.id)?'checked':''}>
+                ${esc(u.display_name)} <span class="muted">@${esc(u.username)}</span>
+              </label>`).join('')}
+          </div>
+          <button type="button" class="btn btn-sm btn-primary" onclick="randomTeams(${cid})">随机分队（需勾选 10 人）</button>
+          <button type="button" class="btn btn-sm btn-default" onclick="saveRoster(${cid})">保存名单（不分队）</button>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            当前：${(c.roster||[]).map(m=>esc(m.display_name)+(m.position!=null?' P'+(m.position+1):'')).join('、')||'未设置'}
+          </div>
+        </div></div>` : ''}
 
         <div class="mt10" style="border-top:1px solid #e3e9ef;padding-top:12px;">
           <button class="btn btn-primary" onclick="saveContest(${cid||'null'})">保存比赛</button>
@@ -223,7 +261,35 @@ function editContest(cid){
         </div>
       </div>
     </div>`;
+  window._classicInit = Object.keys(cur).filter(k=>k.startsWith('p')).sort();
+  if(!window._classicInit.length) window._classicSlots = [null,null,null];
+  else window._classicSlots = window._classicInit.map(k=>cur[k]);
+  renderClassicSlots();
+  toggleModeFields();
 }
+function toggleModeFields(){
+  const m=(document.getElementById('c_mode')||{}).value||'oil';
+  const oil=document.getElementById('oil-slots');
+  const cl=document.getElementById('classic-slots');
+  const hd=document.getElementById('hack-dur-wrap');
+  if(oil) oil.style.display = m==='oil'?'block':'none';
+  if(cl) cl.style.display = m==='oil'?'none':'block';
+  if(hd) hd.style.display = m==='oil'?'block':'none';
+}
+function renderClassicSlots(){
+  const box=document.getElementById('classic-list');
+  if(!box) return;
+  window._classicSlots = window._classicSlots || [null,null,null];
+  const opts = pid => ['<option value="">— 不设置 —</option>'].concat(
+      DATA.problems.map(p=>`<option value="${p.id}" ${pid===p.id?'selected':''}>#${p.id} ${esc(p.title)}</option>`)
+    ).join('');
+  box.innerHTML = window._classicSlots.map((pid,i)=>`
+    <div class="form-row" style="margin-bottom:6px">
+      <div class="form-group" style="flex:0 0 80px;justify-content:center"><label>题目 ${String.fromCharCode(65+i)}</label></div>
+      <div class="form-group"><select id="cslot_${i}">${opts(pid)}</select></div>
+    </div>`).join('');
+}
+function addClassicSlot(){ window._classicSlots.push(null); renderClassicSlots(); }
 
 async function saveContest(cid){
   const g=id=>document.getElementById(id).value;
@@ -247,6 +313,21 @@ async function saveContest(cid){
     }
     toast('比赛已保存','success');
     await reload(); paneContests();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function saveRoster(cid){
+  const ids=[...document.querySelectorAll('.roster-cb')].filter(x=>x.checked).map(x=>x.value);
+  try{
+    await API.post(`/api/admin/contest/${cid}/roster`,{user_ids:ids.join(',')});
+    toast('名单已保存','success'); reload();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function randomTeams(cid){
+  const ids=[...document.querySelectorAll('.roster-cb')].filter(x=>x.checked).map(x=>x.value);
+  if(ids.length!==10){ toast('请恰好勾选 10 名选手','error'); return; }
+  try{
+    const r=await API.post(`/api/admin/contest/${cid}/random_teams`,{user_ids:ids.join(',')});
+    toast('已随机分成 '+r.teams.map(t=>t.name).join(' / '),'success'); reload();
   }catch(e){ toast(e.message,'error'); }
 }
 async function delContest(cid){

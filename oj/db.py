@@ -149,6 +149,34 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at REAL,
     expires_at REAL
 );
+
+-- Per-contest teams (OIL / ICPC). Global `teams` is kept for display leftovers.
+CREATE TABLE IF NOT EXISTS contest_teams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contest_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    color TEXT,
+    created_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS contest_members (
+    contest_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    team_id INTEGER,
+    position INTEGER,
+    PRIMARY KEY (contest_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS rating_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    contest_id INTEGER,
+    old_rating INTEGER,
+    new_rating INTEGER,
+    rank INTEGER,
+    score REAL,
+    created_at REAL
+);
 """
 
 async def get_db():

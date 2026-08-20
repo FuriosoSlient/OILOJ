@@ -467,3 +467,5 @@ textarea.code-editor{width:100%;min-height:340px;border:none;border-radius:0;res
   background:#52c41a; color:#fff; border-radius:3px;
   padding:1px 5px; font-size:10px; vertical-align:middle;
 }
+.rate-gray{color:#808080}.rate-green{color:#008000}.rate-cyan{color:#03a89e}
+.rate-blue{color:#0000ff}.rate-purple{color:#a0a}.rate-orange{color:#ff8c00}.rate-red{color:#c00}

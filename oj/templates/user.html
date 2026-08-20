@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>个人主页 - OIL OJ</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar"><div class="title" id="ptitle">个人主页</div></div>
+    <div class="content" id="app"><div class="loading">加载中...</div></div>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+<script>
+const uid=parseInt(location.pathname.split('/').pop());
+function ratingClass(r){
+  if(r>=2400) return 'rate-red';
+  if(r>=2100) return 'rate-orange';
+  if(r>=1900) return 'rate-purple';
+  if(r>=1600) return 'rate-blue';
+  if(r>=1400) return 'rate-cyan';
+  if(r>=1200) return 'rate-green';
+  return 'rate-gray';
+}
+function drawHist(hist){
+  if(!hist.length) return '<div class="muted">暂无 Rating 记录（参加 Rated 比赛结束后会更新）</div>';
+  const W=720,H=220,pad={l:44,r:12,t:12,b:28};
+  const pts=hist.map(h=>({ts:h.created_at,v:h.new_rating}));
+  const t0=pts[0].ts, t1=Math.max(pts[pts.length-1].ts,t0+1);
+  let mn=Math.min(...pts.map(p=>p.v),1500)-50, mx=Math.max(...pts.map(p=>p.v),1500)+50;
+  const X=t=>pad.l+(t-t0)/(t1-t0)*(W-pad.l-pad.r);
+  const Y=v=>H-pad.b-(v-mn)/(mx-mn)*(H-pad.t-pad.b);
+  let d=pts.map((p,i)=>(i?'L':'M')+X(p.ts)+','+Y(p.v)).join(' ');
+  return `<svg class="score-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <path d="${d}" fill="none" stroke="#2f7ed8" stroke-width="2"/>
+    ${pts.map(p=>`<circle cx="${X(p.ts)}" cy="${Y(p.v)}" r="3" fill="#2f7ed8"/>`).join('')}
+    <text x="8" y="${Y(mx)+4}" font-size="11" fill="#8aa">${mx|0}</text>
+    <text x="8" y="${Y(mn)}" font-size="11" fill="#8aa">${mn|0}</text>
+  </svg>`;
+}
+(async()=>{
+  const me=await loadMe(); renderLayout(me,'home');
+  let data;
+  try{ data=await API.get('/api/user/'+uid); }
+  catch(e){ document.getElementById('app').innerHTML=`<div class="alert alert-error">${esc(e.message)}</div>`; return; }
+  const u=data.user, hist=data.history||[], subs=data.submissions||[];
+  document.getElementById('ptitle').textContent=u.display_name;
+  const last=hist.length?hist[hist.length-1]:null;
+  const delta=last?last.new_rating-last.old_rating:0;
+  document.getElementById('app').innerHTML=`
+    <div class="card"><div class="card-body">
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:22px;font-weight:700">${esc(u.display_name)}
+            ${u.is_admin?'<span class="tag tag-admin">管理员</span>':''}</div>
+          <div class="muted">@${esc(u.username)}</div>
+        </div>
+        <div>
+          <div class="muted" style="font-size:12px">Rating</div>
+          <div class="${ratingClass(u.rating)}" style="font-size:32px;font-weight:800">${u.rating}</div>
+          ${last?`<div class="muted">最近 ${delta>=0?'+':''}${delta}（${esc(last.contest_label||last.contest_name||'比赛')}）</div>`:''}
+        </div>
+      </div>
+    </div></div>
+    <div class="card"><div class="card-header">Rating 曲线</div>
+      <div class="card-body">${drawHist(hist)}</div></div>
+    <div class="card"><div class="card-header">Rating 历史</div>
+      <table><thead><tr><th>时间</th><th>比赛</th><th>名次</th><th>变化</th></tr></thead>
+      <tbody>${hist.slice().reverse().map(h=>`<tr>
+        <td class="mono">${fmtTime(h.created_at)}</td>
+        <td>${h.contest_id?`<a href="/contest/${h.contest_id}">${esc(h.contest_label||h.contest_name||('#'+h.contest_id))}</a>`:'—'}</td>
+        <td class="mono">${h.rank||'—'}</td>
+        <td class="mono">${h.old_rating} → <strong>${h.new_rating}</strong>
+          (${h.new_rating-h.old_rating>=0?'+':''}${h.new_rating-h.old_rating})</td>
+      </tr>`).join('')||'<tr><td colspan="4" class="muted">暂无</td></tr>'}</tbody></table>
+    </div>
+    <div class="card"><div class="card-header">最近提交</div>
+      <table><thead><tr><th>ID</th><th>题目</th><th>结果</th><th>分数</th><th>时间</th></tr></thead>
+      <tbody>${subs.map(s=>`<tr>
+        <td class="mono"><a href="/submission/${s.id}">#${s.id}</a></td>
+        <td><a href="/problem/${s.problem_id}">${esc(s.problem_title)}</a></td>
+        <td>${statusBadge(s.status,s.score)}</td>
+        <td class="mono">${s.score}</td>
+        <td class="mono">${fmtTime(s.created_at)}</td>
+      </tr>`).join('')||'<tr><td colspan="5" class="muted">暂无提交</td></tr>'}</tbody></table>
+    </div>`;
+})();
+</script>
+</body>
+</html>

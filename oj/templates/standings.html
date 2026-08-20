@@ -164,12 +164,45 @@ function renderDetail(){
   return h+'</tbody></table>';
 }
 
+function renderClassic(){
+  const rank=S.ranking||[];
+  const icpc=S.mode==='icpc';
+  document.getElementById('teams').innerHTML=rank.map(r=>`
+    <div class="flex-between" style="padding:10px 6px;border-bottom:1px solid #eef2f6">
+      <div><strong>${r.rank}.</strong> ${esc(r.display_name||r.name||'')}</div>
+      <div class="mono"><strong>${r.score??r.solved??0}</strong>${icpc?' · 罚时 '+ (r.penalty||0):''}</div>
+    </div>`).join('')||'<div class="muted">暂无</div>';
+  const probs=S.problems||[];
+  let h=`<table><thead><tr><th>名次</th><th>名称</th><th>得分</th>${icpc?'<th>罚时</th>':''}`;
+  probs.forEach((p,i)=>h+=`<th>${String.fromCharCode(65+i)}</th>`);
+  h+='</tr></thead><tbody>';
+  rank.forEach(r=>{
+    h+=`<tr><td class="mono">${r.rank}</td><td>${esc(r.display_name||r.name||'')}</td>
+      <td class="mono"><strong>${r.score??r.solved??0}</strong></td>${icpc?`<td class="mono">${r.penalty||0}</td>`:''}`;
+    probs.forEach(p=>{
+      const cell=(r.problems||{})[String(p.id)];
+      if(icpc){
+        if(cell&&cell.solved) h+=`<td class="mono" style="color:#52c41a">+${cell.time}${cell.attempts>1?'('+cell.attempts+')':''}</td>`;
+        else if(cell&&cell.attempts) h+=`<td class="mono" style="color:#d83b3b">-${cell.attempts}</td>`;
+        else h+='<td class="muted">·</td>';
+      }else{
+        h+=`<td class="mono">${cell||0}</td>`;
+      }
+    });
+    h+='</tr>';
+  });
+  document.getElementById('detail').innerHTML=h+'</tbody></table>';
+}
 async function refresh(){
   try{
     S=await API.get(`/api/contest/${cid}/standings`);
   }catch(e){ return; }
   document.getElementById('phase-chip').innerHTML=
     `<span class="phase-chip phase-${S.phase}">${phaseLabel(S.phase)}</span>`;
+  if(S.mode && S.mode!=='oil'){
+    renderClassic();
+    return;
+  }
   renderTeams();
   draw();
   document.getElementById('detail').innerHTML=renderDetail();

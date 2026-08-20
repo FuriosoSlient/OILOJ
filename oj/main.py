@@ -1,5 +1,5 @@
 """FastAPI application: OJ + OIL contest system, LOJ-style UI."""
-import os, sys, json, time, asyncio, threading
+import os, sys, json, time, asyncio, threading, random
 from pathlib import Path
 
 # Ensure UTF-8 console output on Windows (GBK default breaks Chinese logs)
@@ -281,6 +281,14 @@ async def problem_visibility(db, problem, viewer, contest_id=None):
         if link:
             phase = contest_phase(link)
             slot = link["slot"]
+            mode = contest_mode(link)
+            if mode in ("ioi", "icpc"):
+                if phase == "before":
+                    return {"visible": False, "reveal_difficulty": False, "reveal_hack_data": False,
+                            "reason": "比赛尚未开始", "context": "contest"}
+                reveal = phase == "after"
+                return {"visible": True, "reveal_difficulty": reveal, "reveal_hack_data": reveal,
+                        "reason": "", "context": "contest"}
             if phase == "before":
                 return {"visible": False, "reveal_difficulty": False, "reveal_hack_data": False,
                         "reason": "比赛尚未开始", "context": "contest"}
@@ -335,10 +343,10 @@ async def compute_oil_state(db, contest, viewer=None):
     cid = contest["id"]
     now = time.time()
     phase = contest_phase(contest, now)
+    if viewer:
+        viewer = await apply_contest_roster(db, viewer, cid)
 
-    # members
-    cur = await db.execute("SELECT u.*, t.name as team_name, t.color as team_color FROM users u LEFT JOIN teams t ON t.id=u.team_id WHERE u.team_id IS NOT NULL ORDER BY u.team_id, u.position")
-    members = [dict(r) for r in await cur.fetchall()]
+    members = await contest_roster(db, cid)
 
     # locks
     cur = await db.execute("SELECT user_id, locked_at FROM personal_locks WHERE contest_id=?", (cid,))
@@ -708,9 +716,15 @@ async def contest_page(cid: int, request: Request, user=Depends(current_user)):
     try:
         c = await fetch_contest(db, cid)
         if not c: raise HTTPException(404)
+        mode = contest_mode(c)
     finally:
         await db.close()
-    return Render("contest.html", request, user, active="contest", contest=c)
+    tpl = "contest.html" if mode == "oil" else "contest_classic.html"
+    return Render(tpl, request, user, active="contest", contest=c)
+
+@app.get("/user/{uid}", response_class=HTMLResponse)
+async def user_page(uid: int, request: Request, user=Depends(current_user)):
+    return Render("user.html", request, user, active="home")
 
 # ============================================================
 # API: auth
@@ -798,7 +812,8 @@ async def api_me(user=Depends(current_user)):
                      "display_name": user["display_name"], "team_id": user["team_id"],
                      "position": user["position"], "is_admin": bool(user["is_admin"]),
                      "is_manager": bool(managed), "managed_contests": managed,
-                     "is_author": bool(authored), "authored_count": authored}}
+                     "is_author": bool(authored), "authored_count": authored,
+                     "rating": int(user["rating"] if "rating" in user.keys() and user["rating"] is not None else 1500)}}
 
 # ============================================================
 # API: problems / submissions
@@ -989,7 +1004,7 @@ async def api_hacks(limit: int = 50, contest_id: Optional[int] = None, user=Depe
             d = dict(r)
             # Anyone may see that a hack happened and its verdict; the input data
             # and run details are gated in /api/hack/{id}.
-            d["kind_label"] = "个人 Hack" if d["kind"] == "personal" else "团队 Hack"
+            d["kind_label"] = {"personal":"个人 Hack","team":"团队 Hack","submission":"提交 Hack"}.get(d["kind"], d["kind"])
             d["can_detail"] = bool(
                 is_admin(user) or (user and user["id"] in (d["attacker_id"], d["target_id"])))
             out.append(d)
@@ -1158,6 +1173,7 @@ async def api_submit(problem_id: int = Form(...), code: str = Form(...), contest
         if contest_id:
             c = await fetch_contest(db, contest_id)
             if not c: raise HTTPException(404, "比赛不存在")
+            user = await apply_contest_roster(db, user, contest_id)
             phase = contest_phase(c)
             if phase not in ("solve", "hack"):
                 raise HTTPException(403, "当前阶段不能提交")
@@ -1166,18 +1182,23 @@ async def api_submit(problem_id: int = Form(...), code: str = Form(...), contest
                 if pp["id"] == problem_id: slot_for_pid = slot; break
             if not slot_for_pid:
                 raise HTTPException(403, "该题不在比赛中")
-            locked = await is_locked(db, contest_id, user["id"])
-            if slot_for_pid.startswith("personal:"):
-                pos = int(slot_for_pid.split(":")[1])
-                if pos != user["position"]:
-                    raise HTTPException(403, "这不是你的个人题")
-                if locked:
-                    raise HTTPException(403, "你已锁题，不能再提交个人题")
+            mode = contest_mode(c)
+            if mode in ("ioi", "icpc"):
+                if phase != "solve":
+                    raise HTTPException(403, "当前阶段不能提交")
             else:
-                if phase == "solve" and not locked:
-                    raise HTTPException(403, "未锁题不能查看/提交团队题")
-                if phase == "hack" and locked:
-                    raise HTTPException(403, "公开 Hack 阶段仅未锁题选手可以继续提交")
+                locked = await is_locked(db, contest_id, user["id"])
+                if slot_for_pid.startswith("personal:"):
+                    pos = int(slot_for_pid.split(":")[1])
+                    if pos != user["position"]:
+                        raise HTTPException(403, "这不是你的个人题")
+                    if locked:
+                        raise HTTPException(403, "你已锁题，不能再提交个人题")
+                else:
+                    if phase == "solve" and not locked:
+                        raise HTTPException(403, "未锁题不能查看/提交团队题")
+                    if phase == "hack" and locked:
+                        raise HTTPException(403, "公开 Hack 阶段仅未锁题选手可以继续提交")
         # 没有显式 contest_id 时，自动挂到该题正在进行的比赛，否则榜上分数一直是 0
         if not contest_id:
             links = await problem_contest_links(db, problem_id)
@@ -1214,6 +1235,8 @@ async def api_contests(user=Depends(current_user)):
                 continue
             c["phase"] = contest_phase(c)
             c["remaining"] = phase_remaining(c)
+            c["mode"] = contest_mode(c)
+            c["is_rated"] = int(c.get("is_rated") or 0)
             cur2 = await db.execute(
                 "SELECT COUNT(*) AS n FROM contest_problems WHERE contest_id=?", (c["id"],))
             c["problem_count"] = (await cur2.fetchone())["n"]
@@ -1225,6 +1248,290 @@ async def api_contests(user=Depends(current_user)):
 
 def contest_end_ts(contest):
     return contest["start_time"] + contest["solve_duration"] + contest["hack_duration"]
+
+
+def contest_mode(contest):
+    return (contest.get("mode") or "oil").lower()
+
+
+async def contest_roster(db, cid):
+    """Per-contest members. Falls back to the legacy global team assignment."""
+    cur = await db.execute(
+        "SELECT u.id, u.username, u.display_name, u.is_admin, u.rating, "
+        "cm.position AS position, cm.team_id AS team_id, "
+        "t.name AS team_name, t.color AS team_color "
+        "FROM contest_members cm "
+        "JOIN users u ON u.id=cm.user_id "
+        "LEFT JOIN contest_teams t ON t.id=cm.team_id "
+        "WHERE cm.contest_id=? ORDER BY t.id, cm.position, u.id", (cid,))
+    rows = [dict(r) for r in await cur.fetchall()]
+    if rows:
+        return rows
+    cur = await db.execute(
+        "SELECT u.*, t.name as team_name, t.color as team_color FROM users u "
+        "LEFT JOIN teams t ON t.id=u.team_id WHERE u.team_id IS NOT NULL "
+        "ORDER BY u.team_id, u.position")
+    return [dict(r) for r in await cur.fetchall()]
+
+
+async def apply_contest_roster(db, user, cid):
+    """Overlay this contest's team/position onto a user dict."""
+    if not user:
+        return user
+    u = dict(user)
+    cur = await db.execute(
+        "SELECT team_id, position FROM contest_members WHERE contest_id=? AND user_id=?",
+        (cid, user["id"]))
+    r = await cur.fetchone()
+    if r:
+        u["team_id"] = r["team_id"]
+        u["position"] = r["position"]
+    return u
+
+
+def elo_expected(ra, rb):
+    return 1.0 / (1.0 + 10 ** ((rb - ra) / 400.0))
+
+
+async def maybe_apply_rating(db, contest):
+    """Once a rated contest ends, write rating deltas. Idempotent."""
+    if not contest or not int(contest.get("is_rated") or 0):
+        return
+    if int(contest.get("rating_applied") or 0):
+        return
+    if contest_phase(contest) != "after":
+        return
+    cid = contest["id"]
+    mode = contest_mode(contest)
+    players = []
+    if mode == "oil":
+        state = await compute_oil_state(db, contest, None)
+        for m in state["members"]:
+            team_prob = 0
+            for k, v in state["team_problem_score"].items():
+                tid, _pid = k.split(":")
+                if m.get("team_id") is not None and int(tid) == m["team_id"]:
+                    team_prob += v
+            score = m["personal_total"] + m["attacker_gain"] + team_prob
+            players.append({"id": m["id"], "score": score, "penalty": 0})
+    else:
+        state = await compute_classic_state(db, contest, None)
+        for r in state["ranking"]:
+            players.append({
+                "id": r["user_id"] if "user_id" in r else r.get("id"),
+                "score": r.get("score", r.get("solved", 0)),
+                "penalty": r.get("penalty", 0),
+            })
+        players = [p for p in players if p["id"]]
+
+    # unique users
+    by_id = {}
+    for p in players:
+        by_id[p["id"]] = p
+    players = list(by_id.values())
+    if len(players) < 2:
+        await db.execute("UPDATE contests SET rating_applied=1 WHERE id=?", (cid,))
+        await db.commit()
+        return
+
+    ratings = {}
+    for p in players:
+        cur = await db.execute("SELECT rating FROM users WHERE id=?", (p["id"],))
+        row = await cur.fetchone()
+        ratings[p["id"]] = int((row["rating"] if row and row["rating"] is not None else 1500))
+
+    # sort: higher score better; ICPC-like uses penalty as tie-break (lower better)
+    players.sort(key=lambda p: (-p["score"], p["penalty"], p["id"]))
+    n = len(players)
+    now = time.time()
+    K = 32
+    deltas = {}
+    for i, a in enumerate(players):
+        exp = 0.0
+        act = 0.0
+        ra = ratings[a["id"]]
+        for j, b in enumerate(players):
+            if i == j:
+                continue
+            exp += elo_expected(ra, ratings[b["id"]])
+            if a["score"] != b["score"]:
+                act += 1.0 if a["score"] > b["score"] else 0.0
+            elif a["penalty"] != b["penalty"]:
+                act += 1.0 if a["penalty"] < b["penalty"] else 0.0
+            else:
+                act += 0.5
+        deltas[a["id"]] = int(round(K * (act - exp)))
+
+    for rank, a in enumerate(players, 1):
+        old = ratings[a["id"]]
+        new = max(1, old + deltas[a["id"]])
+        await db.execute("UPDATE users SET rating=? WHERE id=?", (new, a["id"]))
+        await db.execute(
+            "INSERT INTO rating_history(user_id,contest_id,old_rating,new_rating,rank,score,created_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (a["id"], cid, old, new, rank, a["score"], now))
+    await db.execute("UPDATE contests SET rating_applied=1 WHERE id=?", (cid,))
+    await db.commit()
+
+
+async def persist_successful_hack_subtask(db, problem, hid, hack_input, expected_out):
+    """Store a successful submission-hack as a new 0-score subtask + files."""
+    slug = problem["slug"]
+    pdir = BASE / "data" / "problems" / slug
+    pdir.mkdir(parents=True, exist_ok=True)
+    in_name = f"hack_{hid}.in"
+    out_name = f"hack_{hid}.out"
+    (pdir / in_name).write_text(hack_input or "", encoding="utf-8", newline="\n")
+    (pdir / out_name).write_text(expected_out or "", encoding="utf-8", newline="\n")
+    sts = list(problem.get("subtasks") or [])
+    sts.append({
+        "name": f"Hack #{hid}",
+        "score": 0,
+        "testcases": [{"input": in_name, "output": out_name}],
+    })
+    await db.execute("UPDATE problems SET subtasks=? WHERE id=?",
+                     (json.dumps(sts, ensure_ascii=False), problem["id"]))
+    await db.commit()
+
+
+async def compute_classic_state(db, contest, viewer=None):
+    """IOI / ICPC live state: problems, ranking, remaining time."""
+    cid = contest["id"]
+    now = time.time()
+    phase = contest_phase(contest, now)
+    mode = contest_mode(contest)
+    problems = contest.get("problems") or {}
+    plist = []
+    for slot, p in sorted(problems.items()):
+        plist.append({
+            "slot": slot, "id": p["id"], "title": ("" if phase == "before" else p["title"]),
+            "type": p.get("problem_type"), "score_total": p["score_total"],
+            "visible": phase != "before",
+            "can_submit": phase == "solve" and bool(viewer),
+        })
+
+    cur = await db.execute(
+        "SELECT s.* FROM submissions s WHERE s.contest_id=? ORDER BY s.id", (cid,))
+    subs = [dict(r) for r in await cur.fetchall()]
+
+    roster = await contest_roster(db, cid)
+    # IOI: individuals who are on the roster, else anyone who submitted
+    if mode == "ioi":
+        if roster:
+            people = roster
+        else:
+            uids = sorted({s["user_id"] for s in subs})
+            people = []
+            for uid in uids:
+                cur = await db.execute(
+                    "SELECT id, username, display_name, rating FROM users WHERE id=?", (uid,))
+                row = await cur.fetchone()
+                if row:
+                    people.append(dict(row))
+        ranking = []
+        for m in people:
+            uid = m["id"]
+            per = {}
+            total = 0
+            for p in plist:
+                best = 0
+                for s in subs:
+                    if s["user_id"] == uid and s["problem_id"] == p["id"]:
+                        best = max(best, s["score"] or 0)
+                per[str(p["id"])] = best
+                total += best
+            ranking.append({
+                "id": uid, "user_id": uid, "display_name": m.get("display_name"),
+                "username": m.get("username"), "rating": m.get("rating", 1500),
+                "score": total, "penalty": 0, "problems": per, "team_id": m.get("team_id"),
+                "team_name": m.get("team_name"),
+            })
+        ranking.sort(key=lambda r: (-r["score"], r["user_id"]))
+        for i, r in enumerate(ranking, 1):
+            r["rank"] = i
+        return {
+            "phase": phase, "now": now, "start": contest["start_time"],
+            "remaining": phase_remaining(contest, now),
+            "mode": mode, "problems": plist, "ranking": ranking,
+            "members": ranking, "team_totals": {},
+            "all_problems_summary": plist,
+            "team_problem_score": {},
+        }
+
+    # ICPC: score by team (or individual if no team)
+    teams = {}
+    if roster:
+        for m in roster:
+            tid = m.get("team_id") or f"u{m['id']}"
+            teams.setdefault(tid, {
+                "id": tid, "name": m.get("team_name") or m.get("display_name"),
+                "color": m.get("team_color") or "#2f7ed8",
+                "members": [], "solved": 0, "penalty": 0, "problems": {},
+            })
+            teams[tid]["members"].append(m)
+    else:
+        uids = sorted({s["user_id"] for s in subs})
+        for uid in uids:
+            cur = await db.execute(
+                "SELECT id, username, display_name, rating FROM users WHERE id=?", (uid,))
+            row = await cur.fetchone()
+            if not row:
+                continue
+            m = dict(row)
+            tid = f"u{uid}"
+            teams[tid] = {
+                "id": tid, "name": m.get("display_name"), "color": "#2f7ed8",
+                "members": [m], "solved": 0, "penalty": 0, "problems": {},
+            }
+
+    start = contest["start_time"]
+    member_of = {}
+    for tid, t in teams.items():
+        for m in t["members"]:
+            member_of[m["id"]] = tid
+
+    for p in plist:
+        pid = p["id"]
+        full = p["score_total"] or 100
+        for tid, t in teams.items():
+            attempts = 0
+            ac_time = None
+            for s in subs:
+                if s["problem_id"] != pid:
+                    continue
+                if member_of.get(s["user_id"]) != tid:
+                    continue
+                if ac_time is not None:
+                    continue
+                if (s["score"] or 0) >= full and s["status"] == "AC":
+                    ac_time = s["created_at"]
+                    t["problems"][str(pid)] = {
+                        "solved": True,
+                        "attempts": attempts + 1,
+                        "time": int((ac_time - start) / 60),
+                    }
+                    t["solved"] += 1
+                    t["penalty"] += int((ac_time - start) / 60) + 20 * attempts
+                else:
+                    if s["status"] not in ("PENDING", "JUDGING", "CE"):
+                        attempts += 1
+            if str(pid) not in t["problems"]:
+                t["problems"][str(pid)] = {"solved": False, "attempts": attempts, "time": None}
+
+    ranking = sorted(teams.values(), key=lambda t: (-t["solved"], t["penalty"], str(t["id"])))
+    for i, t in enumerate(ranking, 1):
+        t["rank"] = i
+        t["score"] = t["solved"]
+        t["user_id"] = (t["members"][0]["id"] if t["members"] else None)
+        t["display_name"] = t["name"]
+    return {
+        "phase": phase, "now": now, "start": contest["start_time"],
+        "remaining": phase_remaining(contest, now),
+        "mode": mode, "problems": plist, "ranking": ranking,
+        "members": ranking, "team_totals": {str(t["id"]): t["solved"] for t in ranking},
+        "all_problems_summary": plist,
+        "team_problem_score": {},
+    }
 
 
 async def record_snapshot(db, contest, state):
@@ -1257,6 +1564,29 @@ async def api_standings(cid: int, user=Depends(current_user)):
     try:
         c = await fetch_contest(db, cid)
         if not c: raise HTTPException(404)
+        try:
+            await maybe_apply_rating(db, c)
+            c = await fetch_contest(db, cid)
+        except Exception:
+            pass
+        if contest_mode(c) in ("ioi", "icpc"):
+            state = await compute_classic_state(db, c, user)
+            end_ts = contest_end_ts(c)
+            cur = await db.execute(
+                "SELECT ts,payload FROM score_snapshots WHERE contest_id=? AND ts<=? ORDER BY ts",
+                (cid, end_ts + 0.5))
+            series = []
+            for r in await cur.fetchall():
+                try:
+                    series.append({"ts": r["ts"], **json.loads(r["payload"])})
+                except Exception:
+                    pass
+            return {"phase": state["phase"], "remaining": state["remaining"],
+                    "start": state["start"], "mode": contest_mode(c),
+                    "is_rated": int(c.get("is_rated") or 0),
+                    "teams": state["ranking"] if contest_mode(c)=="icpc" else [],
+                    "ranking": state["ranking"],
+                    "problems": state["problems"], "series": series}
         state = await compute_oil_state(db, c, user)
         end_ts = contest_end_ts(c)
         cur = await db.execute(
@@ -1283,7 +1613,8 @@ async def api_standings(cid: int, user=Depends(current_user)):
                 "total": state["team_totals"].get(m["team_id"], 0), "members": []})
             teams[m["team_id"]]["members"].append(m)
         return {"phase": state["phase"], "remaining": state["remaining"],
-                "start": state["start"],
+                "start": state["start"], "mode": "oil",
+                "is_rated": int(c.get("is_rated") or 0),
                 "teams": sorted(teams.values(), key=lambda t: -t["total"]),
                 "team_problem_score": state["team_problem_score"],
                 "problems": state["all_problems_summary"],
@@ -1298,9 +1629,17 @@ async def api_contest(cid: int, user=Depends(current_user)):
     try:
         c = await fetch_contest(db, cid)
         if not c: raise HTTPException(404)
-        state = await compute_oil_state(db, c, user)
+        try:
+            await maybe_apply_rating(db, c)
+            c = await fetch_contest(db, cid)
+        except Exception:
+            pass
+        if contest_mode(c) in ("ioi", "icpc"):
+            state = await compute_classic_state(db, c, user)
+        else:
+            state = await compute_oil_state(db, c, user)
         c["state"] = state
-        # don't leak full problem descriptions here; frontend fetches problem detail
+        c["mode"] = contest_mode(c)
         c.pop("problems", None)
         return c
     finally:
@@ -1313,6 +1652,7 @@ async def api_lock(cid: int, user=Depends(current_user)):
     try:
         c = await fetch_contest(db, cid)
         if not c: raise HTTPException(404)
+        user = await apply_contest_roster(db, user, cid)
         phase = contest_phase(c)
         if phase not in ("solve", "hack"):
             raise HTTPException(403, "只有做题阶段或公开 Hack 阶段可以锁题")
@@ -1361,11 +1701,14 @@ async def api_stream(cid: int, request: Request, user=Depends(current_user)):
                 c = await fetch_contest(db, cid)
                 if not c:
                     break
-                state = await compute_oil_state(db, c, user)
-                try:
-                    await record_snapshot(db, c, state)
-                except Exception:
-                    pass
+                if contest_mode(c) in ("ioi", "icpc"):
+                    state = await compute_classic_state(db, c, user)
+                else:
+                    state = await compute_oil_state(db, c, user)
+                    try:
+                        await record_snapshot(db, c, state)
+                    except Exception:
+                        pass
                 payload = json.dumps(state, ensure_ascii=False, default=str)
                 yield f"data: {payload}\n\n"
             finally:
@@ -1394,6 +1737,7 @@ async def api_hack(
     try:
         c = await fetch_contest(db, contest_id)
         if not c: raise HTTPException(404)
+        user = await apply_contest_roster(db, user, contest_id)
         phase = contest_phase(c)
         locked = await is_locked(db, contest_id, user["id"])
         if not locked:
@@ -1536,6 +1880,14 @@ async def admin_overview(user=Depends(current_user)):
                 "JOIN users u ON u.id=m.user_id WHERE m.contest_id=?", (c["id"],))
             c["managers"] = [dict(x) for x in await cur3.fetchall()]
             c["can_edit"] = (role == "admin") or (c["id"] in managed)
+            cur4 = await db.execute(
+                "SELECT * FROM contest_teams WHERE contest_id=? ORDER BY id", (c["id"],))
+            c["contest_teams"] = [dict(x) for x in await cur4.fetchall()]
+            cur5 = await db.execute(
+                "SELECT cm.user_id, cm.team_id, cm.position, u.username, u.display_name, u.rating "
+                "FROM contest_members cm JOIN users u ON u.id=cm.user_id "
+                "WHERE cm.contest_id=? ORDER BY cm.team_id, cm.position", (c["id"],))
+            c["roster"] = [dict(x) for x in await cur5.fetchall()]
             contests.append(c)
 
         users, teams = [], []
@@ -1858,12 +2210,12 @@ async def admin_save_contest(
     solve_duration: int = Form(7200),
     hack_duration: int = Form(3600),
     is_published: int = Form(1),
+    mode: str = Form("oil"),
+    is_rated: int = Form(0),
     user=Depends(current_user),
 ):
     """Create/update a contest. start_time accepts an epoch or 'YYYY-MM-DDTHH:MM'.
-
-    Only admins may create contests or change scheduling; a contest manager can
-    edit the description of a contest they own but never its team setup.
+    Rated flag is admin-only.
     """
     st = (start_time or "").strip()
     try:
@@ -1880,19 +2232,29 @@ async def admin_save_contest(
             await require_contest_editor(db, user, id)
         else:
             require_admin(user)          # only admins create contests
+        md = (mode or "oil").lower()
+        if md not in ("oil", "ioi", "icpc"):
+            md = "oil"
+        rated = 1 if (is_admin(user) and is_rated) else 0
+        if id and not is_admin(user):
+            prev = await fetch_contest(db, id)
+            rated = int(prev.get("is_rated") or 0) if prev else 0
+        if md in ("ioi", "icpc") and hack_duration:
+            # IOI/ICPC have a single contest window; keep hack_duration at 0 unless OIL.
+            pass
         if id:
             await db.execute(
                 "UPDATE contests SET name=?,label=?,description=?,start_time=?,"
-                "solve_duration=?,hack_duration=?,is_published=? WHERE id=?",
+                "solve_duration=?,hack_duration=?,is_published=?,mode=?,is_rated=? WHERE id=?",
                 (name, label, description, ts, solve_duration, hack_duration,
-                 1 if is_published else 0, id))
+                 1 if is_published else 0, md, rated, id))
             cid = id
         else:
             cur = await db.execute(
                 "INSERT INTO contests(name,label,description,mode,start_time,solve_duration,"
-                "hack_duration,is_published,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (name, label, description, "oil", ts, solve_duration, hack_duration,
-                 1 if is_published else 0, time.time()))
+                "hack_duration,is_published,is_rated,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (name, label, description, md, ts, solve_duration, hack_duration,
+                 1 if is_published else 0, rated, time.time()))
             cid = cur.lastrowid
             if not label:
                 await db.execute("UPDATE contests SET label=? WHERE id=?", (f"比赛 #{cid}", cid))
@@ -1932,7 +2294,7 @@ async def admin_delete_contest(cid: int, user=Depends(current_user)):
     db = await get_db()
     try:
         for t in ["contest_problems", "hacks", "personal_locks", "team_messages",
-                  "submissions", "score_snapshots"]:
+                  "submissions", "score_snapshots", "contest_members", "contest_teams"]:
             await db.execute(f"DELETE FROM {t} WHERE contest_id=?", (cid,))
         await db.execute("DELETE FROM contests WHERE id=?", (cid,))
         await db.commit()
@@ -2056,6 +2418,128 @@ async def admin_set_phase(cid: int, phase: str = Form(...), user=Depends(current
     finally:
         await db.close()
 
+
+@app.get("/api/user/{uid}")
+async def api_user_profile(uid: int, user=Depends(current_user)):
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT id, username, display_name, is_admin, rating, created_at FROM users WHERE id=?",
+            (uid,))
+        u = await cur.fetchone()
+        if not u:
+            raise HTTPException(404, "用户不存在")
+        d = dict(u)
+        d["rating"] = int(d.get("rating") or 1500)
+        cur = await db.execute(
+            "SELECT rh.*, c.name AS contest_name, c.label AS contest_label, c.mode "
+            "FROM rating_history rh LEFT JOIN contests c ON c.id=rh.contest_id "
+            "WHERE rh.user_id=? ORDER BY rh.id", (uid,))
+        hist = [dict(r) for r in await cur.fetchall()]
+        cur = await db.execute(
+            "SELECT s.id, s.problem_id, p.title AS problem_title, s.status, s.score, s.created_at, s.contest_id "
+            "FROM submissions s JOIN problems p ON p.id=s.problem_id "
+            "WHERE s.user_id=? ORDER BY s.id DESC LIMIT 30", (uid,))
+        subs = [dict(r) for r in await cur.fetchall()]
+        return {"user": d, "history": hist, "submissions": subs}
+    finally:
+        await db.close()
+
+
+@app.post("/api/admin/contest/{cid}/roster")
+async def admin_set_roster(cid: int, user_ids: str = Form(""),
+                           team_ids: str = Form(""), positions: str = Form(""),
+                           user=Depends(current_user)):
+    require_admin(user)
+    uids = [int(x) for x in user_ids.replace(" ", "").split(",") if x.strip().isdigit()]
+    tids = [int(x) if x.strip().isdigit() else None for x in team_ids.split(",")] if team_ids else []
+    poss = [int(x) if x.strip().lstrip("-").isdigit() else None for x in positions.split(",")] if positions else []
+    db = await get_db()
+    try:
+        if not await fetch_contest(db, cid):
+            raise HTTPException(404)
+        await db.execute("DELETE FROM contest_members WHERE contest_id=?", (cid,))
+        for i, uid in enumerate(uids):
+            await db.execute(
+                "INSERT INTO contest_members(contest_id,user_id,team_id,position) VALUES(?,?,?,?)",
+                (cid, uid, tids[i] if i < len(tids) else None, poss[i] if i < len(poss) else None))
+        await db.commit()
+        return {"ok": True, "count": len(uids)}
+    finally:
+        await db.close()
+
+
+@app.post("/api/admin/contest/{cid}/random_teams")
+async def admin_random_teams(cid: int, user_ids: str = Form(""), user=Depends(current_user)):
+    require_admin(user)
+    uids = [int(x) for x in user_ids.replace(" ", "").split(",") if x.strip().isdigit()]
+    if len(uids) != 10 or len(set(uids)) != 10:
+        raise HTTPException(400, "请提供恰好 10 名不重复选手")
+    db = await get_db()
+    try:
+        if not await fetch_contest(db, cid):
+            raise HTTPException(404)
+        cur = await db.execute("SELECT id, name FROM contest_teams WHERE contest_id=?", (cid,))
+        teams = [dict(r) for r in await cur.fetchall()]
+        colors, names = ["#d83b3b", "#2f7ed8"], ["红队", "蓝队"]
+        while len(teams) < 2:
+            i = len(teams)
+            cur = await db.execute(
+                "INSERT INTO contest_teams(contest_id,name,color,created_at) VALUES(?,?,?,?)",
+                (cid, names[i], colors[i], time.time()))
+            teams.append({"id": cur.lastrowid, "name": names[i]})
+        random.shuffle(uids)
+        a, b = uids[:5], uids[5:]
+        await db.execute("DELETE FROM contest_members WHERE contest_id=?", (cid,))
+        for pos, uid in enumerate(a):
+            await db.execute("INSERT INTO contest_members(contest_id,user_id,team_id,position) VALUES(?,?,?,?)",
+                             (cid, uid, teams[0]["id"], pos))
+        for pos, uid in enumerate(b):
+            await db.execute("INSERT INTO contest_members(contest_id,user_id,team_id,position) VALUES(?,?,?,?)",
+                             (cid, uid, teams[1]["id"], pos))
+        await db.commit()
+        return {"ok": True, "teams": [
+            {"id": teams[0]["id"], "name": teams[0].get("name"), "user_ids": a},
+            {"id": teams[1]["id"], "name": teams[1].get("name"), "user_ids": b},
+        ]}
+    finally:
+        await db.close()
+
+
+@app.post("/api/submission/{sid}/hack")
+async def api_hack_submission(sid: int, input_data: str = Form(...), user=Depends(current_user)):
+    must_login(user)
+    if not input_data or len(input_data) > 16_000_000:
+        raise HTTPException(400, "Hack 输入为空或过长（上限 16MB）")
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT * FROM submissions WHERE id=?", (sid,))
+        sub = await cur.fetchone()
+        if not sub:
+            raise HTTPException(404, "提交不存在")
+        sub = dict(sub)
+        if sub["user_id"] == user["id"]:
+            raise HTTPException(403, "不能 Hack 自己的提交")
+        p = await fetch_problem(db, sub["problem_id"])
+        if not p:
+            raise HTTPException(404, "题目不存在")
+        vis = await problem_visibility(db, p, user, sub.get("contest_id"))
+        if not vis["visible"]:
+            raise HTTPException(403, vis.get("reason") or "无权查看该题")
+        cur = await db.execute(
+            """INSERT INTO hacks(contest_id,attacker_id,target_id,target_team_id,problem_id,
+               submission_id,kind,subtask_indices,input_data,status,created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (sub.get("contest_id"), user["id"], sub["user_id"], None, p["id"], sid, "submission",
+             "[]", input_data, "PENDING", time.time()))
+        hid = cur.lastrowid
+        await db.commit()
+        await HACK_QUEUE.put(hid)
+        return {"ok": True, "hack_id": hid}
+    finally:
+        await db.close()
+
+
 # ============================================================
 # Judge workers
 # ============================================================
@@ -2125,6 +2609,37 @@ def run_hack_sync(hid):
         if atk_sub:
             con.execute("UPDATE hacks SET attacker_submission_id=? WHERE id=?", (atk_sub["id"], hid))
             con.commit()
+
+        if h["kind"] == "submission":
+            tgt_sub = con.execute("SELECT * FROM submissions WHERE id=?", (h["submission_id"],)).fetchone()
+            if not tgt_sub:
+                return finish("INVALID", "目标提交不存在")
+            res = evaluate_hack(p, tgt_sub["code"], h["input_data"], attacker_code=None)
+            res["detail"]["target_submission_id"] = tgt_sub["id"]
+            finish(res["verdict"], res["message"], res["detail"])
+            if res["verdict"] == "SUCCESS":
+                expected = ""
+                for stg in (res.get("detail") or {}).get("stages") or []:
+                    if str(stg.get("label") or "").startswith("标准"):
+                        expected = stg.get("output") or ""
+                        break
+                try:
+                    slug = p_row["slug"]
+                    pdir = BASE / "data" / "problems" / slug
+                    pdir.mkdir(parents=True, exist_ok=True)
+                    in_name = f"hack_{hid}.in"
+                    out_name = f"hack_{hid}.out"
+                    (pdir / in_name).write_text(h["input_data"] or "", encoding="utf-8", newline="\n")
+                    (pdir / out_name).write_text(expected, encoding="utf-8", newline="\n")
+                    sts = json.loads(p_row["subtasks"] or "[]")
+                    sts.append({"name": f"Hack #{hid}", "score": 0,
+                                "testcases": [{"input": in_name, "output": out_name}]})
+                    con.execute("UPDATE problems SET subtasks=? WHERE id=?",
+                                (json.dumps(sts, ensure_ascii=False), h["problem_id"]))
+                    con.commit()
+                except Exception:
+                    import traceback; traceback.print_exc()
+            return
 
         if h["kind"] == "personal":
             tgt_sub = con.execute(

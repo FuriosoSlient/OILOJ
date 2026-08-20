@@ -169,7 +169,7 @@ function fmtClock(secs){
 }
 
 function phaseLabel(p){
-  return {before:'未开始',solve:'🔒 做题阶段',hack:'⚔️ 公开 Hack 阶段',after:'已结束'}[p]||p;
+  return {before:'未开始',solve:'比赛中',hack:'⚔️ 公开 Hack 阶段',after:'已结束'}[p]||p;
 }
 
 function toast(msg, type='info'){
@@ -192,11 +192,12 @@ function renderLayout(user, active){
   if(!sb) return;
   const u = user ? `
     <div class="user-box">
-      <div><span class="uname">${esc(user.display_name)}</span>${
+      <div><a href="/user/${user.id}" class="uname">${esc(user.display_name)}</a>${
         user.is_admin ? ' <span class="tag tag-admin">管理员</span>'
                       : (user.is_manager ? ' <span class="tag tag-manager">出题负责人</span>'
                       : (user.is_author ? ' <span class="tag tag-author">出题人</span>' : ''))}</div>
-      <div style="color:#8aa4bd;font-size:12px;margin:2px 0 6px;">@${esc(user.username)}</div>
+      <div style="color:#8aa4bd;font-size:12px;margin:2px 0 6px;">@${esc(user.username)}
+        · <a href="/user/${user.id}"><strong>${user.rating!=null?user.rating:1500}</strong></a></div>
       <a href="/logout">退出登录</a>
     </div>` : `
     <div class="user-box">

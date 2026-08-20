@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>比赛 - OIL OJ</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar">
+      <div class="title" id="ctitle">比赛</div>
+      <div style="flex:1"></div>
+      <span id="phase-chip"></span>
+      <span class="mono" id="clock" style="margin-left:12px;font-size:15px"></span>
+      <a href="#" id="standings-link" class="btn btn-sm btn-default" style="margin-left:12px">榜单</a>
+      <a href="/contests" class="btn btn-sm btn-default" style="margin-left:8px">全部比赛</a>
+    </div>
+    <div class="content" id="app"><div class="loading">加载中...</div></div>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+<script>
+const cid=parseInt(location.pathname.split('/')[2]);
+document.getElementById('standings-link').href=`/contest/${cid}/standings`;
+let me=null, C=null, evt=null;
+
+function render(){
+  const s=C.state||{};
+  const mode=(C.mode||s.mode||'ioi').toUpperCase();
+  document.getElementById('ctitle').textContent =
+    `${C.label||('比赛 #'+C.id)} · ${C.name||''}  [${mode}${C.is_rated?' · Rated':''}]`;
+  document.getElementById('phase-chip').innerHTML =
+    `<span class="phase-chip phase-${s.phase}">${phaseLabel(s.phase)}</span>`;
+  document.getElementById('clock').textContent = s.phase==='after'?'已结束':fmtClock(s.remaining);
+  const probs=(s.problems||[]).filter(p=>p.visible);
+  const rank=s.ranking||[];
+  document.getElementById('app').innerHTML=`
+    ${C.description?`<div class="card"><div class="card-body">${esc(C.description)}</div></div>`:''}
+    <div class="card">
+      <div class="card-header">题目</div>
+      <table><thead><tr><th>#</th><th>标题</th><th>满分</th><th></th></tr></thead>
+      <tbody>${probs.map((p,i)=>`<tr>
+        <td class="mono">${String.fromCharCode(65+i)}</td>
+        <td><a href="/problem/${p.id}?contest_id=${cid}">${esc(p.title||'—')}</a></td>
+        <td class="mono">${p.score_total}</td>
+        <td>${p.can_submit?`<a class="btn btn-sm btn-primary" href="/problem/${p.id}?contest_id=${cid}">提交</a>`:''}</td>
+      </tr>`).join('')||'<tr><td colspan="4" class="muted">题目尚未公布</td></tr>'}</tbody></table>
+    </div>
+    <div class="card">
+      <div class="card-header">实时排名（前 20）</div>
+      <table><thead><tr><th>名次</th><th>选手 / 队伍</th><th>得分</th>${(C.mode||s.mode)==='icpc'?'<th>罚时</th>':''}</tr></thead>
+      <tbody>${rank.slice(0,20).map(r=>`<tr>
+        <td class="mono">${r.rank}</td>
+        <td>${r.user_id?`<a href="/user/${r.user_id}">${esc(r.display_name||r.name||'')}</a>`:esc(r.name||r.display_name||'')}</td>
+        <td class="mono"><strong>${r.score??r.solved??0}</strong></td>
+        ${(C.mode||s.mode)==='icpc'?`<td class="mono">${r.penalty||0}</td>`:''}
+      </tr>`).join('')||'<tr><td colspan="4" class="muted">暂无成绩</td></tr>'}</tbody></table>
+    </div>`;
+}
+async function load(){
+  C=await API.get(`/api/contest/${cid}`);
+  render();
+}
+function connect(){
+  if(evt) evt.close();
+  evt=new EventSource(`/api/contest/${cid}/stream`);
+  evt.onmessage=ev=>{ try{ const st=JSON.parse(ev.data); if(C){ C.state=st; render(); } }catch(e){} };
+}
+(async()=>{
+  me=await loadMe(); renderLayout(me,'contests');
+  await load(); connect();
+})();
+</script>
+</body>
+</html>

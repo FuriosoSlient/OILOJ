@@ -36,8 +36,9 @@ function card(c){
         <a class="contest-title" href="/contest/${c.id}">${esc(c.label||('比赛 #'+c.id))} · ${esc(c.name)}</a>
         ${!c.is_published?' <span class="badge badge-PENDING">草稿</span>':''}
         <div class="muted" style="font-size:12px;margin-top:4px">
+          ${(c.mode||'oil').toUpperCase()}${c.is_rated?' · Rated':' · Unrated'} ·
           开始：${fmtTime(c.start_time)} ·
-          做题 ${Math.round(c.solve_duration/60)} 分钟 + Hack ${Math.round(c.hack_duration/60)} 分钟 ·
+          ${Math.round(c.solve_duration/60)} 分钟${(c.mode||'oil')==='oil'?' + Hack '+Math.round(c.hack_duration/60)+' 分钟':''} ·
           ${c.problem_count} 道题
         </div>
         ${c.description?`<div class="muted" style="font-size:13px;margin-top:6px">${esc(c.description)}</div>`:''}
