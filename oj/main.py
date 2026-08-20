@@ -209,22 +209,16 @@ async def require_console_access(db, user):
 async def require_problem_owner(db, user, pid):
     """Edit rights for ONE specific problem.
 
-    Admins and contest managers can edit any problem; the original author keeps
-    access to their own work even if they were never (or are no longer) a manager.
+    Only admins and the problem's author may edit. Contest managers cannot edit
+    other people's problems (public or private).
     """
     if is_admin(user):
         return "admin"
-<<<<<<< HEAD
-    if user and await managed_contest_ids(db, user):
-        return "manager"
-    raise HTTPException(403, "需要管理员或出题负责人权限")
-=======
     if user:
         p = await fetch_problem(db, pid)
         if p and is_author(user, p):
             return "author"
     raise HTTPException(403, "只能编辑自己创建的题目")
->>>>>>> a6c4a19 (Stop post-contest chart growth and tighten manager rights)
 
 
 async def require_contest_editor(db, user, cid):
@@ -759,7 +753,8 @@ async def api_login(username: str = Form(...), password: str = Form(...)):
         cur = await db.execute("SELECT * FROM users WHERE username=?", (username,))
         u = await cur.fetchone()
         if not u or not verify_password(password, u["password_hash"]):
-            raise HTTPException(401, "用 await create_session(db, u["id"])
+            raise HTTPException(401, "用户名或密码错误")
+        token = await create_session(db, u["id"])
         resp = JSONResponse({"ok": True, "user": {"id": u["id"], "username": u["username"], "display_name": u["display_name"], "is_admin": bool(u["is_admin"])}})
         resp.set_cookie("oj_token", token, httponly=True, samesite="lax", max_age=7*86400)
         return resp
