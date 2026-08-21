@@ -35,6 +35,57 @@ function esc(s){
   return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+const HACK_FILES = {};
+function hackFileBar(taId){
+  return `<div class="mt10 flex gap8" style="align-items:center;flex-wrap:wrap">
+    <label class="btn btn-sm btn-default" style="cursor:pointer">上传数据
+      <input type="file" style="display:none" onchange="onHackFile(this,'${taId}')">
+    </label>
+    <button type="button" class="btn btn-sm btn-default" onclick="downloadHackText('${taId}')">下载当前数据</button>
+    <span class="muted" id="${taId}-filehint" style="font-size:12px"></span>
+  </div>`;
+}
+function onHackFile(inp, taId){
+  const f = inp.files && inp.files[0];
+  if(!f) return;
+  HACK_FILES[taId] = f;
+  const hint = document.getElementById(taId+'-filehint');
+  if(hint) hint.textContent = `已选择 ${f.name}（${f.size} 字节）`;
+  if(f.size > 200000){
+    const ta = document.getElementById(taId);
+    if(ta){ ta.value=''; ta.placeholder=`已选择大文件 ${f.name}，提交时将上传文件，不在框内展开`; }
+    return;
+  }
+  f.text().then(t=>{ const ta=document.getElementById(taId); if(ta) ta.value=t; }).catch(()=>{});
+}
+function downloadHackText(taId){
+  const f = HACK_FILES[taId];
+  if(f){
+    const a=document.createElement('a'); a.href=URL.createObjectURL(f);
+    a.download=f.name||'hack.in'; a.click(); return;
+  }
+  const ta=document.getElementById(taId);
+  const blob=new Blob([ta?ta.value:''], {type:'text/plain;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='hack.in'; a.click();
+}
+async function postHackForm(url, fields, taId){
+  const fd = new FormData();
+  for(const k in fields) if(fields[k]!==undefined && fields[k]!==null) fd.append(k, fields[k]);
+  const f = HACK_FILES[taId];
+  const ta = document.getElementById(taId);
+  if(f && f.size > 200000){
+    fd.append('file', f, f.name||'hack.in');
+  } else if(ta && ta.value){
+    fd.append('input_data', ta.value);
+  } else if(f){
+    fd.append('file', f, f.name||'hack.in');
+  }
+  const r = await fetch(url,{method:'POST',body:fd});
+  if(!r.ok){ const e = await r.json().catch(()=>({detail:r.statusText})); throw new Error(e.detail||'Error'); }
+  return r.json();
+}
+
 function statusBadge(status, score){
   if(status==='AC') return `<span class="badge badge-AC">Accepted</span>`;
   if(status==='CE') return `<span class="badge badge-CE">Compilation Error</span>`;
@@ -146,8 +197,9 @@ async function showHackReport(hid, el){
     const h=await API.get(`/api/hack/${hid}`);
     const cls=h.status==='SUCCESS'?'success':(h.status==='FAILURE'?'failure':'invalid');
     el.innerHTML=`<div class="hack-result ${cls}">
-      <div>${hackBadge(h.status)} <strong>#${h.id}</strong>
-        <span class="muted">${esc(h.problem_title||'')}</span></div>
+      <div>${hackBadge(h.status)} <strong><a href="/hack/${h.id}">H${h.id}</a></strong>
+        <span class="muted">${esc(h.problem_title||'')}</span>
+        ${h.can_download?`<a class="btn btn-sm btn-default" href="/api/hack/${h.id}/input" style="margin-left:8px">下载数据</a>`:''}</div>
       ${h.message?`<div style="margin-top:4px">${esc(h.message)}</div>`:''}
       ${renderHackDetail(h)}
     </div>`;

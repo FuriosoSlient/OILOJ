@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hack 详情 - OIL OJ</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <div class="topbar">
+      <div class="title" id="ptitle">Hack 详情</div>
+      <div style="flex:1"></div>
+      <a href="/status" class="btn btn-sm btn-default">← 返回评测状态</a>
+    </div>
+    <div class="content" id="content">
+      <div class="card"><div class="card-body muted">加载中...</div></div>
+    </div>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+<script>
+const hid = parseInt(location.pathname.split('/').pop());
+let me = null;
+
+async function render(){
+  let h;
+  try{ h = await API.get(`/api/hack/${hid}`); }
+  catch(e){
+    document.getElementById('content').innerHTML =
+      `<div class="card"><div class="card-body"><div class="alert alert-error">${esc(e.message)}</div></div></div>`;
+    document.getElementById('ptitle').textContent = '无法查看';
+    return null;
+  }
+  document.getElementById('ptitle').textContent = `Hack H${h.id}`;
+  const size = h.input_size || 0;
+  const sizeLabel = size >= 1048576 ? (size/1048576).toFixed(2)+' MB'
+                  : size >= 1024 ? (size/1024).toFixed(1)+' KB' : size+' B';
+  const preview = h.restricted ? '' : (h.input_preview
+    ? textBlock((h.input_preview||'')+(h.input_truncated?'\n…（预览已截断，请下载完整数据）':''), 'Hack 输入预览')
+    : '');
+  const dl = (!h.restricted && h.can_download)
+    ? `<a class="btn btn-sm btn-default" href="/api/hack/${h.id}/input">下载完整数据（${sizeLabel}）</a>`
+    : '';
+  document.getElementById('content').innerHTML = `
+    <div class="card">
+      <div class="card-header">Hack H${h.id}</div>
+      <div class="card-body">
+        <div class="problem-meta">
+          <span><strong>攻击者：</strong>${esc(h.attacker_name||'')}</span>
+          <span><strong>目标：</strong>${esc(h.target_name||'')}</span>
+          <span><strong>题目：</strong><a href="/problem/${h.problem_id}">${esc(h.problem_title||'')}</a></span>
+          <span><strong>类型：</strong>${esc({personal:'个人 Hack',team:'团队 Hack',submission:'提交 Hack'}[h.kind]||h.kind)}</span>
+          <span><strong>时间：</strong>${fmtTime(h.created_at)}</span>
+        </div>
+        <div style="margin-top:12px;font-size:16px;">${hackBadge(h.status)}
+          ${h.message?`<span style="margin-left:8px">${esc(h.message)}</span>`:''}</div>
+      </div>
+    </div>
+    ${h.restricted ? `<div class="card"><div class="card-body">
+        <div class="alert alert-warn">比赛期间仅公开判定结果，详情对非当事人隐藏。</div></div></div>` : `
+      <div class="card"><div class="card-header">判定报告</div>
+        <div class="card-body">${renderHackDetail(h)}</div></div>
+      <div class="card"><div class="card-header">Hack 数据 ${dl}</div>
+        <div class="card-body">${preview || '<span class="muted">无数据</span>'}</div></div>
+    `}`;
+  return h;
+}
+
+(async()=>{
+  me = await loadMe();
+  renderLayout(me, 'status');
+  const h = await render();
+  if(h && (h.status==='PENDING' || h.status==='JUDGING')){
+    followHack(hid, ()=>{}).then(()=>render());
+  }
+})();
+</script>
+</body>
+</html>

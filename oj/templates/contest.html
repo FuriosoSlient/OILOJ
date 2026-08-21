@@ -257,7 +257,7 @@ function renderBoard(s){
       const tgt=state.members.find(m=>m.id===h.target_id);
       const prob=state.all_problems_summary.find(p=>p.id===h.problem_id);
       html+=`<tr>
-        <td class="mono">#${h.id}</td>
+        <td class="mono"><a href="/hack/${h.id}">H${h.id}</a></td>
         <td>${h.kind==='personal'?'个人题':'团队题'}</td>
         <td>${atk?esc(atk.display_name):'?'}</td>
         <td>${tgt?esc(tgt.display_name):'?'}</td>
@@ -435,6 +435,7 @@ function renderHack(s){
         <div class="form-group mt10">
           <label>测试输入</label>
           <textarea class="mono" id="hack-input-${t.user_id}-${t.problem_id}" data-keep="hi-${t.user_id}-${t.problem_id}" rows="6" placeholder="输入会喂给对方的程序..."></textarea>
+          ${hackFileBar('hack-input-'+t.user_id+'-'+t.problem_id)}
         </div>
         <button class="btn btn-danger btn-sm" onclick="doPersonalHack(${t.user_id},${t.problem_id})">发起 Hack</button>
         <div id="hack-res-${t.user_id}-${t.problem_id}"></div>
@@ -460,6 +461,7 @@ function renderHack(s){
         <div class="form-group">
           <label>测试输入</label>
           <textarea class="mono" id="thack-input-${t.problem_id}" data-keep="thi-${t.problem_id}" rows="6"></textarea>
+          ${hackFileBar('thack-input-'+t.problem_id)}
         </div>
         <button class="btn btn-danger btn-sm" onclick="doTeamHack(${t.problem_id})">发起团队 Hack</button>
         <div id="thack-res-${t.problem_id}"></div>
@@ -495,12 +497,13 @@ async function doPersonalHack(targetId,problemId){
   const boxes=document.querySelectorAll(`.hk-sub[data-target="${targetId}"][data-problem="${problemId}"]:checked`);
   const idxs=Array.from(boxes).map(b=>parseInt(b.dataset.idx));
   if(!idxs.length){toast('请选择至少一个子任务','error');return;}
-  const input=document.getElementById(`hack-input-${targetId}-${problemId}`).value;
-  if(!input.trim()){toast('请输入测试数据','error');return;}
+  const taId=`hack-input-${targetId}-${problemId}`;
+  const input=(document.getElementById(taId).value||'') + (HACK_FILES[taId]?' file':'');
+  if(!(document.getElementById(taId).value||'').trim() && !HACK_FILES[taId]){toast('请输入或上传测试数据','error');return;}
   const res=document.getElementById(`hack-res-${targetId}-${problemId}`);
         res.innerHTML='<div class="alert alert-info"><span class="live-dot"></span>已提交，正在运行 校验器 → 标程 → 对方程序 ...</div>';
   try{
-    const r=await API.post('/api/hack',{contest_id:cid,target_id:targetId,problem_id:problemId,kind:'personal',subtask_indices:JSON.stringify(idxs),input_data:input});
+    const r=await postHackForm('/api/hack',{contest_id:cid,target_id:targetId,problem_id:problemId,kind:'personal',subtask_indices:JSON.stringify(idxs)}, taId);
     await followHack(r.hack_id, h=>{
       if(h.status==='PENDING'||h.status==='JUDGING')
         res.innerHTML='<div class="alert alert-info"><span class="live-dot"></span>判定中：校验器 → 标程 → 对方程序 ...</div>';
@@ -516,8 +519,8 @@ async function doPersonalHack(targetId,problemId){
 }
 
 async function doTeamHack(problemId){
-  const input=document.getElementById(`thack-input-${problemId}`).value;
-  if(!input.trim()){toast('请输入测试数据','error');return;}
+  const taId=`thack-input-${problemId}`;
+  if(!(document.getElementById(taId).value||'').trim() && !HACK_FILES[taId]){toast('请输入或上传测试数据','error');return;}
   // target = any member of opposing team
   const myTid=me.team_id;
   const opp=state.members.find(m=>m.team_id!==myTid);

@@ -382,11 +382,13 @@ def judge_submission(problem, code, hack_input=None, progress=None):
             subtask_scores.append(got)
             total += got
         full = problem.get("score_total") or 0
-        if total >= full:
+        # 0-score Hack 点失败时原题仍可能满分，不能因此标成 AC。
+        all_cases_ok = bool(case_results) and all(c.get("status") == "AC" for c in case_results)
+        if all_cases_ok and total >= full:
             overall = "AC"
         elif total > 0:
             if overall not in ("TLE", "MLE", "RE", "SE"):
-                overall = "WA"  # partial credit
+                overall = "WA"  # partial credit / 满分未过 Hack
         else:
             if overall == "AC":
                 overall = "WA"

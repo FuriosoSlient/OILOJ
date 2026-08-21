@@ -182,14 +182,20 @@ async function loadSubs(){
   const diff = difficultyBadge(problem.difficulty, problem.difficulty_hidden);
   const sec=(t,body)=> body&&body.trim() ? `<h2>${t}</h2>${renderStatement(body)}` : '';
   const hackSec = (problem.hack_data&&problem.hack_data.length) ? `
-      <h2>Hack 数据（比赛已结束，公开）</h2>
-      ${problem.hack_data.map(h=>`
-        <div class="subtask-editor">
-          <div><strong>#${h.id}</strong> ${h.kind==='personal'?'个人 Hack':'团队 Hack'}
-            ${hackBadge(h.status)} <span class="muted">${esc(h.attacker||'')} → ${esc(h.target||'')}</span></div>
-          ${h.message?`<div class="muted" style="font-size:12px;margin:3px 0;">${esc(h.message)}</div>`:''}
-          ${textBlock((h.input_data||'').slice(0,3000)+((h.input_data||'').length>3000?'\n... (已截断)':''),'Hack 输入数据')}
-        </div>`).join('')}` : '';
+      <h2>Hack 记录</h2>
+      <details>
+        <summary style="cursor:pointer">成功 Hack 共 ${problem.hack_data.length} 条（展开列表，完整数据请打开独立页面）</summary>
+        <ul style="margin:10px 0 0 18px;line-height:1.8">
+          ${problem.hack_data.map(h=>{
+            const sz=h.input_size||0;
+            const lab=sz>=1048576?(sz/1048576).toFixed(2)+' MB':sz>=1024?(sz/1024).toFixed(1)+' KB':sz+' B';
+            return `<li><a href="/hack/${h.id}">H${h.id}</a>
+              ${hackBadge(h.status)}
+              <span class="muted">${esc(h.attacker||'')} → ${esc(h.target||'')} · ${lab}</span>
+              ${h.message?`<span class="muted"> · ${esc(h.message)}</span>`:''}</li>`;
+          }).join('')}
+        </ul>
+      </details>` : '';
   document.getElementById('stmt').innerHTML=`
     <div class="problem-meta">
       <span><strong>类型：</strong>${typeMap[problem.problem_type]||'普通题'}</span>

@@ -702,6 +702,10 @@ async def submission_page(sid: int, request: Request, user=Depends(current_user)
     """Full-page submission detail (nicer to read than the inline panel)."""
     return Render("submission.html", request, user, active="status")
 
+@app.get("/hack/{hid}", response_class=HTMLResponse)
+async def hack_page(hid: int, request: Request, user=Depends(current_user)):
+    return Render("hack.html", request, user, active="status")
+
 @app.get("/admin/problem", response_class=HTMLResponse)
 async def admin_problem_new_page(request: Request, user=Depends(current_user)):
     return Render("problem_edit.html", request, user, active="admin")
@@ -1047,17 +1051,41 @@ async def api_hack_detail(hid: int, user=Depends(current_user)):
         involved = bool(user and user["id"] in (d["attacker_id"], d["target_id"]))
         c = await fetch_contest(db, d["contest_id"]) if d["contest_id"] else None
         ended = (contest_phase(c) == "after") if c else True
+        raw = d.get("input_data") or ""
+        d["input_size"] = len(raw)
+        d.pop("input_data", None)
 
         if not (is_admin(user) or involved or ended):
-            # Outsiders during a live contest only learn the verdict.
-            d.pop("input_data", None)
             d["detail"] = {}
             d["restricted"] = True
+            d["can_download"] = False
         else:
-            # Never ship megabytes of hack input to the browser.
-            if d.get("input_data") and len(d["input_data"]) > 20000:
-                d["input_data"] = d["input_data"][:20000] + "\n...（已截断）"
+            d["can_download"] = True
+            preview_n = 4000
+            d["input_preview"] = raw[:preview_n]
+            d["input_truncated"] = len(raw) > preview_n
         return d
+    finally:
+        await db.close()
+
+
+@app.get("/api/hack/{hid}/input")
+async def api_hack_input_download(hid: int, user=Depends(current_user)):
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT * FROM hacks WHERE id=?", (hid,))
+        h = await cur.fetchone()
+        if not h:
+            raise HTTPException(404)
+        d = dict(h)
+        involved = bool(user and user["id"] in (d["attacker_id"], d["target_id"]))
+        c = await fetch_contest(db, d["contest_id"]) if d["contest_id"] else None
+        ended = (contest_phase(c) == "after") if c else True
+        if not (is_admin(user) or involved or ended):
+            raise HTTPException(403, "无权下载该 Hack 数据")
+        data = (d.get("input_data") or "").encode("utf-8")
+        return Response(content=data, media_type="text/plain; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="hack_{hid}.in"'})
     finally:
         await db.close()
 
@@ -1730,6 +1758,23 @@ async def api_stream(cid: int, request: Request, user=Depends(current_user)):
 # ============================================================
 # API: hacks
 # ============================================================
+async def read_hack_payload(input_data: Optional[str], file: Optional[UploadFile]):
+    text = ""
+    if file is not None and (file.filename or "").strip():
+        raw = await file.read()
+        if len(raw) > 16_000_000:
+            raise HTTPException(400, "Hack 输入为空或过长（上限 16MB）")
+        try:
+            text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        except UnicodeDecodeError:
+            text = raw.decode("utf-8", errors="replace")
+    if not (text or "").strip():
+        text = input_data or ""
+    if not text or len(text) > 16_000_000:
+        raise HTTPException(400, "Hack 输入为空或过长（上限 16MB）")
+    return text
+
+
 @app.post("/api/hack")
 async def api_hack(
     contest_id: int = Form(...),
@@ -1737,12 +1782,12 @@ async def api_hack(
     problem_id: int = Form(...),
     kind: str = Form(...),
     subtask_indices: str = Form(""),
-    input_data: str = Form(...),
+    input_data: str = Form(""),
+    file: Optional[UploadFile] = File(None),
     user=Depends(current_user),
 ):
     must_login(user)
-    if not input_data or len(input_data) > 16_000_000:
-        raise HTTPException(400, "Hack 输入为空或过长（上限 16MB）")
+    input_data = await read_hack_payload(input_data, file)
     db = await get_db()
     try:
         c = await fetch_contest(db, contest_id)
@@ -2595,11 +2640,52 @@ def run_judge_sync(sid):
     finally:
         con.close()
 
+def _persist_hack_testcase(con, p_row, hid, hack_input, expected):
+    slug = p_row["slug"]
+    pdir = BASE / "data" / "problems" / slug
+    pdir.mkdir(parents=True, exist_ok=True)
+    in_name = f"hack_{hid}.in"
+    out_name = f"hack_{hid}.out"
+    (pdir / in_name).write_text(hack_input or "", encoding="utf-8", newline="\n")
+    (pdir / out_name).write_text(expected or "", encoding="utf-8", newline="\n")
+    sts = json.loads(p_row["subtasks"] or "[]")
+    if any(t.get("name") == f"Hack #{hid}" for t in sts):
+        return
+    sts.append({"name": f"Hack #{hid}", "score": 0,
+                "testcases": [{"input": in_name, "output": out_name}]})
+    con.execute("UPDATE problems SET subtasks=? WHERE id=?",
+                (json.dumps(sts, ensure_ascii=False), p_row["id"]))
+    con.commit()
+
+
+def _requeue_correct_subs(con, problem_id, score_total):
+    full = score_total or 0
+    rows = con.execute(
+        "SELECT id FROM submissions WHERE problem_id=? AND status NOT IN ('PENDING','JUDGING') "
+        "AND (status='AC' OR (score IS NOT NULL AND score>=?))",
+        (problem_id, full)).fetchall()
+    ids = []
+    for r in rows:
+        con.execute("UPDATE submissions SET status='PENDING' WHERE id=?", (r["id"],))
+        ids.append(r["id"])
+    if ids:
+        con.commit()
+    return ids
+
+
+def _hack_expected_from_detail(detail):
+    for stg in (detail or {}).get("stages") or []:
+        if str(stg.get("label") or "").startswith("标准"):
+            return stg.get("output") or ""
+    return ""
+
+
 def run_hack_sync(hid):
     import sqlite3
     dbp = str(BASE / "data" / "oj.db")
     con = sqlite3.connect(dbp)
     con.row_factory = sqlite3.Row
+    rejudge = []
 
     def finish(status, message, detail=None):
         con.execute(
@@ -2627,36 +2713,26 @@ def run_hack_sync(hid):
             con.execute("UPDATE hacks SET attacker_submission_id=? WHERE id=?", (atk_sub["id"], hid))
             con.commit()
 
+        def on_success(detail):
+            nonlocal rejudge
+            try:
+                expected = _hack_expected_from_detail(detail)
+                _persist_hack_testcase(con, p_row, hid, h["input_data"], expected)
+                rejudge = _requeue_correct_subs(con, h["problem_id"], p_row["score_total"])
+            except Exception:
+                import traceback; traceback.print_exc()
+
         if h["kind"] == "submission":
             tgt_sub = con.execute("SELECT * FROM submissions WHERE id=?", (h["submission_id"],)).fetchone()
             if not tgt_sub:
-                return finish("INVALID", "目标提交不存在")
+                finish("INVALID", "目标提交不存在")
+                return rejudge
             res = evaluate_hack(p, tgt_sub["code"], h["input_data"], attacker_code=None)
             res["detail"]["target_submission_id"] = tgt_sub["id"]
             finish(res["verdict"], res["message"], res["detail"])
             if res["verdict"] == "SUCCESS":
-                expected = ""
-                for stg in (res.get("detail") or {}).get("stages") or []:
-                    if str(stg.get("label") or "").startswith("标准"):
-                        expected = stg.get("output") or ""
-                        break
-                try:
-                    slug = p_row["slug"]
-                    pdir = BASE / "data" / "problems" / slug
-                    pdir.mkdir(parents=True, exist_ok=True)
-                    in_name = f"hack_{hid}.in"
-                    out_name = f"hack_{hid}.out"
-                    (pdir / in_name).write_text(h["input_data"] or "", encoding="utf-8", newline="\n")
-                    (pdir / out_name).write_text(expected, encoding="utf-8", newline="\n")
-                    sts = json.loads(p_row["subtasks"] or "[]")
-                    sts.append({"name": f"Hack #{hid}", "score": 0,
-                                "testcases": [{"input": in_name, "output": out_name}]})
-                    con.execute("UPDATE problems SET subtasks=? WHERE id=?",
-                                (json.dumps(sts, ensure_ascii=False), h["problem_id"]))
-                    con.commit()
-                except Exception:
-                    import traceback; traceback.print_exc()
-            return
+                on_success(res.get("detail"))
+            return rejudge
 
         if h["kind"] == "personal":
             tgt_sub = con.execute(
@@ -2664,11 +2740,15 @@ def run_hack_sync(hid):
                 "ORDER BY score DESC, id DESC LIMIT 1",
                 (h["target_id"], h["problem_id"], h["contest_id"])).fetchone()
             if not tgt_sub:
-                return finish("INVALID", "对方没有提交")
+                finish("INVALID", "对方没有提交")
+                return rejudge
             res = evaluate_hack(p, tgt_sub["code"], h["input_data"], attacker_code=atk_code)
             res["detail"]["target_submission_id"] = tgt_sub["id"]
             res["detail"]["attacker_submission_id"] = atk_sub["id"] if atk_sub else None
-            return finish(res["verdict"], res["message"], res["detail"])
+            finish(res["verdict"], res["message"], res["detail"])
+            if res["verdict"] == "SUCCESS":
+                on_success(res.get("detail"))
+            return rejudge
 
         # ---- team hack: every distinct correct solution must break ----
         solvers = con.execute(
@@ -2677,7 +2757,8 @@ def run_hack_sync(hid):
             "AND u.team_id=? AND s.score>=?",
             (h["contest_id"], h["problem_id"], h["target_team_id"], p_row["score_total"])).fetchall()
         if not solvers:
-            return finish("INVALID", "对方没有正确做法")
+            finish("INVALID", "对方没有正确做法")
+            return rejudge
 
         seen, targets = set(), []
         for row in solvers:
@@ -2695,7 +2776,8 @@ def run_hack_sync(hid):
                 merged["stages"] = d.get("stages", [])
                 merged["checker"] = d.get("checker", "")
             if res["verdict"] == "INVALID":
-                return finish("INVALID", res["message"], d)
+                finish("INVALID", res["message"], d)
+                return rejudge
             merged["per_member"].append({
                 "user_id": row["user_id"], "display_name": row["display_name"],
                 "submission_id": row["id"], "verdict": res["verdict"],
@@ -2706,14 +2788,18 @@ def run_hack_sync(hid):
                 break
 
         if survivor:
-            return finish("FAILURE", f"{survivor['display_name']} 的做法通过了该测试", merged)
-        return finish("SUCCESS", f"对方 {len(targets)} 份正确做法全部被击破", merged)
+            finish("FAILURE", f"{survivor['display_name']} 的做法通过了该测试", merged)
+        else:
+            finish("SUCCESS", f"对方 {len(targets)} 份正确做法全部被击破", merged)
+            on_success(merged)
+        return rejudge
     except Exception as e:
         import traceback; traceback.print_exc()
         try:
             finish("SE", f"评测异常: {e}")
         except Exception:
             pass
+        return rejudge
     finally:
         con.close()
 

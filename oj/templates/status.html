@@ -30,7 +30,7 @@
           <tbody id="list"></tbody>
         </table>
       </div>
-      <div id="detail"></div>
+
     </div>
   </main>
 </div>
@@ -67,7 +67,7 @@ async function load(){
       ? `<span class="badge badge-HACK">${esc(r.label||'Hack')}</span>`
       : '<span class="muted" style="font-size:12px">提交</span>';
     const link = r.kind==='hack'
-      ? `<a href="#" onclick="showHack(${r.id});return false;">H${r.id}</a>`
+      ? `<a href="/hack/${r.id}">H${r.id}</a>`
       : `<a href="/submission/${r.id}">#${r.id}</a>`;
     return `<tr>
       <td class="mono">${link}</td>
@@ -80,28 +80,6 @@ async function load(){
     </tr>`;
   }).join('') || '<tr><td colspan="7" class="text-center muted" style="padding:30px;">暂无记录</td></tr>';
 }
-
-async function showHack(hid){
-  const box=document.getElementById('detail');
-  box.innerHTML='<div class="card"><div class="card-body muted">加载中...</div></div>';
-  let h;
-  try{ h=await API.get(`/api/hack/${hid}`); }
-  catch(e){ box.innerHTML=`<div class="card"><div class="card-body"><div class="alert alert-error">${esc(e.message)}</div></div></div>`; return; }
-
-  let html=`<div class="card"><div class="card-header">Hack H${h.id} —
-      ${esc(h.attacker_name||'?')} → ${esc(h.target_name||'?')} · ${esc(h.problem_title||'')}
-      <button class="btn btn-sm btn-default" style="float:right" onclick="closeDetail()">关闭</button></div>
-    <div class="card-body">
-    <p>${hackBadge(h.status)} ${h.message?esc(h.message):''}</p>
-    ${renderHackDetail(h)}`;
-  if(h.input_data){
-    html+=`<h3>Hack 数据</h3>${textBlock(h.input_data,'Hack 输入数据')}`;
-  }
-  box.innerHTML=html+'</div></div>';
-  if(box.scrollIntoView) box.scrollIntoView({behavior:'smooth',block:'start'});
-}
-
-function closeDetail(){ document.getElementById('detail').innerHTML=''; }
 
 (async()=>{ me=await loadMe(); renderLayout(me,'status'); load(); setInterval(load,4000); })();
 </script></body>
