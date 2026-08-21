@@ -17,11 +17,11 @@
       <a href="#" id="back" class="btn btn-sm btn-default" style="margin-left:12px">← 返回比赛</a>
     </div>
     <div class="content">
-      <div class="card">
+      <div class="card" id="card-teams">
         <div class="card-header"><span class="live-dot"></span>队伍总分</div>
         <div class="card-body" id="teams"></div>
       </div>
-      <div class="card">
+      <div class="card" id="card-chart">
         <div class="card-header">分数变化折线图</div>
         <div class="card-body">
           <div class="flex gap8" style="margin-bottom:8px">
@@ -164,34 +164,42 @@ function renderDetail(){
   return h+'</tbody></table>';
 }
 
+function classicCell(mode, cell, full){
+  if(mode==='icpc'){
+    if(cell && cell.solved)
+      return `<td class="mono" style="color:#52c41a;font-weight:600">+${cell.time}${cell.attempts>1?' ('+cell.attempts+')':''}</td>`;
+    if(cell && cell.attempts)
+      return `<td class="mono" style="color:#d83b3b">-${cell.attempts}</td>`;
+    return `<td class="muted">·</td>`;
+  }
+  const v = (typeof cell==='number') ? cell : (cell && cell.score) || 0;
+  if(!v) return `<td class="muted">·</td>`;
+  const ok = full && v>=full;
+  return `<td class="mono" style="color:${ok?'#52c41a':'#d48806'};font-weight:600">${v}${full?`/${full}`:''}</td>`;
+}
 function renderClassic(){
   const rank=S.ranking||[];
   const icpc=S.mode==='icpc';
-  document.getElementById('teams').innerHTML=rank.map(r=>`
-    <div class="flex-between" style="padding:10px 6px;border-bottom:1px solid #eef2f6">
-      <div><strong>${r.rank}.</strong> ${esc(r.display_name||r.name||'')}</div>
-      <div class="mono"><strong>${r.score??r.solved??0}</strong>${icpc?' · 罚时 '+ (r.penalty||0):''}</div>
-    </div>`).join('')||'<div class="muted">暂无</div>';
   const probs=S.problems||[];
-  let h=`<table><thead><tr><th>名次</th><th>名称</th><th>得分</th>${icpc?'<th>罚时</th>':''}`;
-  probs.forEach((p,i)=>h+=`<th>${String.fromCharCode(65+i)}</th>`);
+  const ct=document.getElementById('card-teams'); if(ct) ct.style.display='none';
+  const cc=document.getElementById('card-chart'); if(cc) cc.style.display='none';
+  let h=`<table class="standings-table"><thead><tr>
+    <th>名次</th><th style="text-align:left">选手</th>
+    <th>${icpc?'过题':'总分'}</th>${icpc?'<th>罚时</th>':''}`;
+  probs.forEach((p,i)=>{
+    h+=`<th>${String.fromCharCode(65+i)}<div class="muted" style="font-weight:400;font-size:11px">${esc(p.title||'')}${p.score_total!=null?' · '+p.score_total+'分':''}</div></th>`;
+  });
   h+='</tr></thead><tbody>';
   rank.forEach(r=>{
-    h+=`<tr><td class="mono">${r.rank}</td><td>${esc(r.display_name||r.name||'')}</td>
-      <td class="mono"><strong>${r.score??r.solved??0}</strong></td>${icpc?`<td class="mono">${r.penalty||0}</td>`:''}`;
-    probs.forEach(p=>{
-      const cell=(r.problems||{})[String(p.id)];
-      if(icpc){
-        if(cell&&cell.solved) h+=`<td class="mono" style="color:#52c41a">+${cell.time}${cell.attempts>1?'('+cell.attempts+')':''}</td>`;
-        else if(cell&&cell.attempts) h+=`<td class="mono" style="color:#d83b3b">-${cell.attempts}</td>`;
-        else h+='<td class="muted">·</td>';
-      }else{
-        h+=`<td class="mono">${cell||0}</td>`;
-      }
-    });
+    h+=`<tr>
+      <td class="mono">${r.rank}</td>
+      <td style="text-align:left">${r.user_id?`<a href="/user/${r.user_id}">${esc(r.display_name||r.name||'')}</a>`:esc(r.display_name||r.name||'')}</td>
+      <td class="mono"><strong>${r.score??r.solved??0}</strong></td>
+      ${icpc?`<td class="mono">${r.penalty||0}</td>`:''}`;
+    probs.forEach(p=> h+=classicCell(S.mode, (r.problems||{})[String(p.id)], p.score_total));
     h+='</tr>';
   });
-  document.getElementById('detail').innerHTML=h+'</tbody></table>';
+  document.getElementById('detail').innerHTML=(h+'</tbody></table>') || '<div class="muted">暂无报名选手</div>';
 }
 async function refresh(){
   try{
