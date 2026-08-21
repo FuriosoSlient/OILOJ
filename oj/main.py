@@ -908,7 +908,7 @@ async def submission_access(db, sub, viewer):
                                          hidden entirely
       * during the public hack phase  -> contestants may open anyone's source
       * spectators / other users      -> may see the row, never the detail
-      * after the contest ends        -> rows public, detail still owner-only
+      * after the contest ends        -> 代码与测试点详情对所有人公开
     """
     if viewer and sub["user_id"] == viewer["id"]:
         return True, True
@@ -924,6 +924,12 @@ async def submission_access(db, sub, viewer):
     if not c:
         return True, False
     phase = contest_phase(c)
+    if viewer:
+        viewer = await apply_contest_roster(db, viewer, cid)
+
+    # 比赛结束后公开所有提交详情（含代码、测试点）
+    if phase == "after":
+        return True, True
 
     if phase == "hack":
         # Public hack: contestants may open anyone's source to craft tests.
