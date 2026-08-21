@@ -40,6 +40,7 @@ function card(c){
           开始：${fmtTime(c.start_time)} ·
           ${Math.round(c.solve_duration/60)} 分钟${(c.mode||'oil')==='oil'?' + Hack '+Math.round(c.hack_duration/60)+' 分钟':''} ·
           ${c.problem_count} 道题
+          ${(c.mode==='ioi'||c.mode==='icpc')?` · 已报名 ${c.registered_count||0} 人${c.registered?'（你已报名）':''}`:''}
         </div>
         ${c.description?`<div class="muted" style="font-size:13px;margin-top:6px">${esc(c.description)}</div>`:''}
       </div>

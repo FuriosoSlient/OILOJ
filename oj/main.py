@@ -1227,6 +1227,12 @@ async def api_submit(problem_id: int = Form(...), code: str = Form(...), contest
             if mode in ("ioi", "icpc"):
                 if phase != "solve":
                     raise HTTPException(403, "当前阶段不能提交")
+                if not is_admin(user):
+                    cur = await db.execute(
+                        "SELECT 1 FROM contest_members WHERE contest_id=? AND user_id=?",
+                        (contest_id, user["id"]))
+                    if not await cur.fetchone():
+                        raise HTTPException(403, "请先报名本场比赛再提交")
             else:
                 locked = await is_locked(db, contest_id, user["id"])
                 if slot_for_pid.startswith("personal:"):
@@ -1281,6 +1287,18 @@ async def api_contests(user=Depends(current_user)):
             cur2 = await db.execute(
                 "SELECT COUNT(*) AS n FROM contest_problems WHERE contest_id=?", (c["id"],))
             c["problem_count"] = (await cur2.fetchone())["n"]
+            try:
+                cur3 = await db.execute(
+                    "SELECT COUNT(*) AS n FROM contest_members WHERE contest_id=?", (c["id"],))
+                c["registered_count"] = (await cur3.fetchone())["n"]
+            except Exception:
+                c["registered_count"] = 0
+            c["registered"] = False
+            if user and c["mode"] in ("ioi", "icpc"):
+                cur4 = await db.execute(
+                    "SELECT 1 FROM contest_members WHERE contest_id=? AND user_id=?",
+                    (c["id"], user["id"]))
+                c["registered"] = await cur4.fetchone() is not None
             out.append(c)
         return {"contests": out}
     finally:
@@ -1434,40 +1452,65 @@ async def persist_successful_hack_subtask(db, problem, hid, hack_input, expected
 
 
 async def compute_classic_state(db, contest, viewer=None):
-    """IOI / ICPC live state: problems, ranking, remaining time."""
+    """IOI / ICPC: 个人赛。榜单与 Rated 只统计已报名选手，不组队。"""
     cid = contest["id"]
     now = time.time()
     phase = contest_phase(contest, now)
     mode = contest_mode(contest)
     problems = contest.get("problems") or {}
+    roster = await contest_roster(db, cid)
+    viewer_reg = bool(viewer and any(m["id"] == viewer["id"] for m in roster))
+    can_submit = phase == "solve" and bool(viewer) and (viewer_reg or is_admin(viewer))
     plist = []
     for slot, p in sorted(problems.items()):
         plist.append({
             "slot": slot, "id": p["id"], "title": ("" if phase == "before" else p["title"]),
             "type": p.get("problem_type"), "score_total": p["score_total"],
             "visible": phase != "before",
-            "can_submit": phase == "solve" and bool(viewer),
+            "can_submit": can_submit,
         })
 
     cur = await db.execute(
         "SELECT s.* FROM submissions s WHERE s.contest_id=? ORDER BY s.id", (cid,))
     subs = [dict(r) for r in await cur.fetchall()]
+    people = roster
+    start = contest["start_time"]
+    ranking = []
 
-    roster = await contest_roster(db, cid)
-    # IOI: individuals who are on the roster, else anyone who submitted
-    if mode == "ioi":
-        if roster:
-            people = roster
-        else:
-            uids = sorted({s["user_id"] for s in subs})
-            people = []
-            for uid in uids:
-                cur = await db.execute(
-                    "SELECT id, username, display_name, rating FROM users WHERE id=?", (uid,))
-                row = await cur.fetchone()
-                if row:
-                    people.append(dict(row))
-        ranking = []
+    if mode == "icpc":
+        for m in people:
+            uid = m["id"]
+            per = {}
+            solved = 0
+            penalty = 0
+            for p in plist:
+                pid = p["id"]
+                full = p["score_total"] or 100
+                attempts = 0
+                ac_time = None
+                for s in subs:
+                    if s["user_id"] != uid or s["problem_id"] != pid:
+                        continue
+                    if ac_time is not None:
+                        continue
+                    if (s["score"] or 0) >= full and s["status"] == "AC":
+                        ac_time = s["created_at"]
+                    elif s["status"] not in ("PENDING", "JUDGING", "CE"):
+                        attempts += 1
+                if ac_time is not None:
+                    mins = int((ac_time - start) / 60)
+                    per[str(pid)] = {"solved": True, "attempts": attempts + 1, "time": mins}
+                    solved += 1
+                    penalty += mins + 20 * attempts
+                else:
+                    per[str(pid)] = {"solved": False, "attempts": attempts, "time": None}
+            ranking.append({
+                "id": uid, "user_id": uid, "display_name": m.get("display_name"),
+                "username": m.get("username"), "rating": m.get("rating", 1500),
+                "score": solved, "solved": solved, "penalty": penalty, "problems": per,
+            })
+        ranking.sort(key=lambda r: (-r["solved"], r["penalty"], r["user_id"]))
+    else:
         for m in people:
             uid = m["id"]
             per = {}
@@ -1482,94 +1525,22 @@ async def compute_classic_state(db, contest, viewer=None):
             ranking.append({
                 "id": uid, "user_id": uid, "display_name": m.get("display_name"),
                 "username": m.get("username"), "rating": m.get("rating", 1500),
-                "score": total, "penalty": 0, "problems": per, "team_id": m.get("team_id"),
-                "team_name": m.get("team_name"),
+                "score": total, "penalty": 0, "problems": per,
             })
         ranking.sort(key=lambda r: (-r["score"], r["user_id"]))
-        for i, r in enumerate(ranking, 1):
-            r["rank"] = i
-        return {
-            "phase": phase, "now": now, "start": contest["start_time"],
-            "remaining": phase_remaining(contest, now),
-            "mode": mode, "problems": plist, "ranking": ranking,
-            "members": ranking, "team_totals": {},
-            "all_problems_summary": plist,
-            "team_problem_score": {},
-        }
 
-    # ICPC: score by team (or individual if no team)
-    teams = {}
-    if roster:
-        for m in roster:
-            tid = m.get("team_id") or f"u{m['id']}"
-            teams.setdefault(tid, {
-                "id": tid, "name": m.get("team_name") or m.get("display_name"),
-                "color": m.get("team_color") or "#2f7ed8",
-                "members": [], "solved": 0, "penalty": 0, "problems": {},
-            })
-            teams[tid]["members"].append(m)
-    else:
-        uids = sorted({s["user_id"] for s in subs})
-        for uid in uids:
-            cur = await db.execute(
-                "SELECT id, username, display_name, rating FROM users WHERE id=?", (uid,))
-            row = await cur.fetchone()
-            if not row:
-                continue
-            m = dict(row)
-            tid = f"u{uid}"
-            teams[tid] = {
-                "id": tid, "name": m.get("display_name"), "color": "#2f7ed8",
-                "members": [m], "solved": 0, "penalty": 0, "problems": {},
-            }
-
-    start = contest["start_time"]
-    member_of = {}
-    for tid, t in teams.items():
-        for m in t["members"]:
-            member_of[m["id"]] = tid
-
-    for p in plist:
-        pid = p["id"]
-        full = p["score_total"] or 100
-        for tid, t in teams.items():
-            attempts = 0
-            ac_time = None
-            for s in subs:
-                if s["problem_id"] != pid:
-                    continue
-                if member_of.get(s["user_id"]) != tid:
-                    continue
-                if ac_time is not None:
-                    continue
-                if (s["score"] or 0) >= full and s["status"] == "AC":
-                    ac_time = s["created_at"]
-                    t["problems"][str(pid)] = {
-                        "solved": True,
-                        "attempts": attempts + 1,
-                        "time": int((ac_time - start) / 60),
-                    }
-                    t["solved"] += 1
-                    t["penalty"] += int((ac_time - start) / 60) + 20 * attempts
-                else:
-                    if s["status"] not in ("PENDING", "JUDGING", "CE"):
-                        attempts += 1
-            if str(pid) not in t["problems"]:
-                t["problems"][str(pid)] = {"solved": False, "attempts": attempts, "time": None}
-
-    ranking = sorted(teams.values(), key=lambda t: (-t["solved"], t["penalty"], str(t["id"])))
-    for i, t in enumerate(ranking, 1):
-        t["rank"] = i
-        t["score"] = t["solved"]
-        t["user_id"] = (t["members"][0]["id"] if t["members"] else None)
-        t["display_name"] = t["name"]
+    for i, r in enumerate(ranking, 1):
+        r["rank"] = i
     return {
         "phase": phase, "now": now, "start": contest["start_time"],
         "remaining": phase_remaining(contest, now),
         "mode": mode, "problems": plist, "ranking": ranking,
-        "members": ranking, "team_totals": {str(t["id"]): t["solved"] for t in ranking},
+        "members": ranking, "team_totals": {},
         "all_problems_summary": plist,
         "team_problem_score": {},
+        "registered_count": len(roster),
+        "viewer_registered": viewer_reg,
+        "can_register": phase != "after",
     }
 
 
@@ -1679,10 +1650,54 @@ async def api_contest(cid: int, user=Depends(current_user)):
             state = await compute_oil_state(db, c, user)
         c["state"] = state
         c["mode"] = contest_mode(c)
+        c["is_rated"] = int(c.get("is_rated") or 0)
+        c["registered"] = bool(state.get("viewer_registered")) if contest_mode(c) in ("ioi", "icpc") else False
+        c["registered_count"] = int(state.get("registered_count") or 0)
         c.pop("problems", None)
         return c
     finally:
         await db.close()
+
+@app.post("/api/contest/{cid}/register")
+async def api_contest_register(cid: int, user=Depends(current_user)):
+    must_login(user)
+    db = await get_db()
+    try:
+        c = await fetch_contest(db, cid)
+        if not c:
+            raise HTTPException(404)
+        if contest_mode(c) not in ("ioi", "icpc"):
+            raise HTTPException(400, "OIL 比赛由管理员分队，无需报名")
+        if contest_phase(c) == "after":
+            raise HTTPException(403, "比赛已结束，无法报名")
+        await db.execute(
+            "INSERT OR IGNORE INTO contest_members(contest_id,user_id,team_id,position) VALUES(?,?,NULL,NULL)",
+            (cid, user["id"]))
+        await db.commit()
+        return {"ok": True, "registered": True}
+    finally:
+        await db.close()
+
+
+@app.post("/api/contest/{cid}/unregister")
+async def api_contest_unregister(cid: int, user=Depends(current_user)):
+    must_login(user)
+    db = await get_db()
+    try:
+        c = await fetch_contest(db, cid)
+        if not c:
+            raise HTTPException(404)
+        if contest_mode(c) not in ("ioi", "icpc"):
+            raise HTTPException(400, "OIL 比赛不能自行退赛")
+        if contest_phase(c) != "before":
+            raise HTTPException(403, "比赛开始后不能取消报名")
+        await db.execute("DELETE FROM contest_members WHERE contest_id=? AND user_id=?",
+                         (cid, user["id"]))
+        await db.commit()
+        return {"ok": True, "registered": False}
+    finally:
+        await db.close()
+
 
 @app.post("/api/contest/{cid}/lock")
 async def api_lock(cid: int, user=Depends(current_user)):

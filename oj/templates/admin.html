@@ -236,6 +236,7 @@ function editContest(cid){
         <button type="button" class="btn btn-sm btn-default" onclick="addClassicSlot()">+ 添加题目</button>
         </div>
         ${ROLE==='admin' && cid ? `
+        <div id="oil-roster-wrap">
         <h3 style="margin:16px 0 8px;font-size:14px;">本场参赛名单 / 随机分队</h3>
         <div class="form-hint">OIL 需要 10 人随机分成红/蓝两队各 5 人并分配位置 1–5。每场比赛独立分队，不影响其他场。</div>
         <div class="form-row"><div class="form-group">
@@ -252,7 +253,26 @@ function editContest(cid){
           <div class="muted" style="margin-top:8px;font-size:12px">
             当前：${(c.roster||[]).map(m=>esc(m.display_name)+(m.position!=null?' P'+(m.position+1):'')).join('、')||'未设置'}
           </div>
-        </div></div>` : ''}
+        </div></div>
+        </div>
+        <div id="classic-reg-wrap" style="display:none">
+        <h3 style="margin:16px 0 8px;font-size:14px;">报名名单（IOI / 单人 ICPC）</h3>
+        <div class="form-hint">选手自行在比赛页报名。Rated 只统计已报名选手。无需组队。管理员可代为勾选后保存。</div>
+        <div class="form-row"><div class="form-group">
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+            ${DATA.users.map(u=>`
+              <label class="file-chip" style="cursor:pointer">
+                <input type="checkbox" class="reg-cb" value="${u.id}"
+                  ${(c.roster||[]).some(m=>m.user_id===u.id)?'checked':''}>
+                ${esc(u.display_name)} <span class="muted">@${esc(u.username)}</span>
+              </label>`).join('')}
+          </div>
+          <button type="button" class="btn btn-sm btn-default" onclick="saveClassicRoster(${cid})">保存报名名单</button>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            已报名 ${(c.roster||[]).length} 人：${(c.roster||[]).map(m=>esc(m.display_name)).join('、')||'暂无'}
+          </div>
+        </div></div>
+        </div>` : ''}
 
         <div class="mt10" style="border-top:1px solid #e3e9ef;padding-top:12px;">
           <button class="btn btn-primary" onclick="saveContest(${cid||'null'})">保存比赛</button>
@@ -272,9 +292,13 @@ function toggleModeFields(){
   const oil=document.getElementById('oil-slots');
   const cl=document.getElementById('classic-slots');
   const hd=document.getElementById('hack-dur-wrap');
+  const orw=document.getElementById('oil-roster-wrap');
+  const crw=document.getElementById('classic-reg-wrap');
   if(oil) oil.style.display = m==='oil'?'block':'none';
   if(cl) cl.style.display = m==='oil'?'none':'block';
   if(hd) hd.style.display = m==='oil'?'block':'none';
+  if(orw) orw.style.display = m==='oil'?'block':'none';
+  if(crw) crw.style.display = m==='oil'?'none':'block';
 }
 function renderClassicSlots(){
   const box=document.getElementById('classic-list');
@@ -333,6 +357,13 @@ async function saveRoster(cid){
   try{
     await API.post(`/api/admin/contest/${cid}/roster`,{user_ids:ids.join(',')});
     toast('名单已保存','success'); reload();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function saveClassicRoster(cid){
+  const ids=[...document.querySelectorAll('.reg-cb')].filter(x=>x.checked).map(x=>x.value);
+  try{
+    await API.post(`/api/admin/contest/${cid}/roster`,{user_ids:ids.join(',')});
+    toast('报名名单已保存','success'); reload();
   }catch(e){ toast(e.message,'error'); }
 }
 async function randomTeams(cid){
