@@ -887,11 +887,12 @@ async def api_problem(pid: int, contest_id: Optional[int] = None, user=Depends(c
         # After the contest ends, publish the hack data submitted against this problem.
         if vis["reveal_hack_data"]:
             cur = await db.execute(
-                "SELECT h.id,h.kind,h.status,h.message,h.input_data,h.created_at,"
+                "SELECT h.id,h.kind,h.status,h.message,h.created_at,"
+                "       length(h.input_data) AS input_size,"
                 "       ua.display_name AS attacker, ut.display_name AS target "
                 "FROM hacks h LEFT JOIN users ua ON ua.id=h.attacker_id "
                 "LEFT JOIN users ut ON ut.id=h.target_id "
-                "WHERE h.problem_id=? AND h.status IN ('SUCCESS','FAILURE') ORDER BY h.id",
+                "WHERE h.problem_id=? AND h.status='SUCCESS' ORDER BY h.id",
                 (pid,))
             out["hack_data"] = [dict(r) for r in await cur.fetchall()]
         return {"problem": out, "visibility": vis}
@@ -2569,10 +2570,11 @@ async def admin_random_teams(cid: int, user_ids: str = Form(""), user=Depends(cu
 
 
 @app.post("/api/submission/{sid}/hack")
-async def api_hack_submission(sid: int, input_data: str = Form(...), user=Depends(current_user)):
+async def api_hack_submission(sid: int, input_data: str = Form(""),
+                              file: Optional[UploadFile] = File(None),
+                              user=Depends(current_user)):
     must_login(user)
-    if not input_data or len(input_data) > 16_000_000:
-        raise HTTPException(400, "Hack 输入为空或过长（上限 16MB）")
+    input_data = await read_hack_payload(input_data, file)
     db = await get_db()
     try:
         cur = await db.execute("SELECT * FROM submissions WHERE id=?", (sid,))
@@ -2609,16 +2611,18 @@ def run_judge_sync(sid):
     """Synchronously judge a submission; runs in thread."""
     import sqlite3
     dbp = str(BASE / "data" / "oj.db")
-    con = sqlite3.connect(dbp)
+    con = sqlite3.connect(dbp, timeout=60)
     con.row_factory = sqlite3.Row
     try:
-        row = con.execute("SELECT s.*, p.* FROM submissions s JOIN problems p ON p.id=s.problem_id WHERE s.id=?", (sid,)).fetchone()
+        row = con.execute(
+            "SELECT s.code AS _code, p.id, p.slug, p.time_limit, p.memory_limit, p.subtasks, "
+            "p.validator, p.interactive, p.score_total, p.checker_type "
+            "FROM submissions s JOIN problems p ON p.id=s.problem_id WHERE s.id=?", (sid,)).fetchone()
         if not row: return
-        p = {k: row[k] for k in row.keys() if k in ("id","slug","time_limit","memory_limit","subtasks","validator","interactive","score_total","checker_type")}
+        p = {k: row[k] for k in ("id","slug","time_limit","memory_limit","subtasks","validator","interactive","score_total","checker_type")}
         p["subtasks"] = json.loads(p["subtasks"] or "[]")
+        code = row["_code"]
 
-        # Mark as JUDGING and stream per-testcase progress into the DB so the
-        # submission SSE endpoint can push live updates to the browser.
         con.execute("UPDATE submissions SET status='JUDGING' WHERE id=?", (sid,))
         con.commit()
 
@@ -2631,12 +2635,21 @@ def run_judge_sync(sid):
             except Exception:
                 pass
 
-        result = judge_submission(p, row["code"], progress=on_progress)
+        result = judge_submission(p, code, progress=on_progress)
         con.execute(
             "UPDATE submissions SET status=?, score=?, subtask_scores=?, case_results=?, verdict_detail=?, judged_at=? WHERE id=?",
             (result["status"], result["score"], json.dumps(result["subtask_scores"]),
              json.dumps(result["case_results"]), result.get("message",""), time.time(), sid))
         con.commit()
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        try:
+            con.execute(
+                "UPDATE submissions SET status='SE', verdict_detail=?, judged_at=? WHERE id=?",
+                (f"评测异常: {e}", time.time(), sid))
+            con.commit()
+        except Exception:
+            pass
     finally:
         con.close()
 
@@ -2683,14 +2696,21 @@ def _hack_expected_from_detail(detail):
 def run_hack_sync(hid):
     import sqlite3
     dbp = str(BASE / "data" / "oj.db")
-    con = sqlite3.connect(dbp)
+    con = sqlite3.connect(dbp, timeout=60)
     con.row_factory = sqlite3.Row
     rejudge = []
 
     def finish(status, message, detail=None):
+        blob = "{}"
+        try:
+            blob = json.dumps(detail or {}, ensure_ascii=False)
+            if len(blob) > 500_000:
+                blob = json.dumps({"truncated": True, "message": message}, ensure_ascii=False)
+        except Exception:
+            blob = "{}"
         con.execute(
             "UPDATE hacks SET status=?, message=?, detail=?, judged_at=? WHERE id=?",
-            (status, message, json.dumps(detail or {}, ensure_ascii=False), time.time(), hid))
+            (status, message, blob, time.time(), hid))
         con.commit()
 
     try:
@@ -2807,7 +2827,11 @@ async def judge_worker(queue, fn):
     while True:
         item = await queue.get()
         try:
-            await asyncio.to_thread(fn, item)
+            extra = await asyncio.to_thread(fn, item)
+            # Hack 成功后会返回需要重测的 submission id 列表
+            if extra:
+                for sid in extra:
+                    await JUDGE_QUEUE.put(sid)
         except Exception as e:
             import traceback; traceback.print_exc()
         finally:
