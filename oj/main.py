@@ -916,20 +916,26 @@ async def submission_access(db, sub, viewer):
         return True, True
 
     cid = sub["contest_id"]
-    if not cid:
-        # Practice submission outside any contest: listed publicly, detail private.
-        return True, False
-
-    c = await fetch_contest(db, cid)
-    if not c:
-        return True, False
-    phase = contest_phase(c)
-    if viewer:
+    c = await fetch_contest(db, cid) if cid else None
+    if viewer and cid:
         viewer = await apply_contest_roster(db, viewer, cid)
 
-    # 比赛结束后公开所有提交详情（含代码、测试点）
-    if phase == "after":
+    # 该题所属比赛若已全部结束，公开代码与测试点（即使 submission.contest_id 为空）
+    try:
+        links = await problem_contest_links(db, sub["problem_id"])
+    except Exception:
+        links = []
+    if links and all(contest_phase(l) == "after" for l in links):
         return True, True
+    if c and contest_phase(c) == "after":
+        return True, True
+    if c and contest_mode(c) in ("ioi", "icpc") and contest_phase(c) != "solve" and contest_phase(c) != "before":
+        return True, True
+
+    if not cid or not c:
+        return True, False
+
+    phase = contest_phase(c)
 
     if phase == "hack":
         # Public hack: contestants may open anyone's source to craft tests.
@@ -1261,7 +1267,7 @@ def contest_mode(contest):
 
 
 async def contest_roster(db, cid):
-    """Per-contest members. Falls back to the legacy global team assignment."""
+    """Per-contest members only. Do NOT fall back to the global 3-team assignment."""
     try:
         cur = await db.execute(
             "SELECT u.*, cm.position AS position, cm.team_id AS team_id, "
@@ -1270,16 +1276,9 @@ async def contest_roster(db, cid):
             "JOIN users u ON u.id=cm.user_id "
             "LEFT JOIN contest_teams t ON t.id=cm.team_id "
             "WHERE cm.contest_id=? ORDER BY t.id, cm.position, u.id", (cid,))
-        rows = [dict(r) for r in await cur.fetchall()]
-        if rows:
-            return rows
+        return [dict(r) for r in await cur.fetchall()]
     except Exception:
-        pass
-    cur = await db.execute(
-        "SELECT u.*, t.name as team_name, t.color as team_color FROM users u "
-        "LEFT JOIN teams t ON t.id=u.team_id WHERE u.team_id IS NOT NULL "
-        "ORDER BY u.team_id, u.position")
-    return [dict(r) for r in await cur.fetchall()]
+        return []
 
 
 async def apply_contest_roster(db, user, cid):
@@ -2498,18 +2497,17 @@ async def admin_random_teams(cid: int, user_ids: str = Form(""), user=Depends(cu
     try:
         if not await fetch_contest(db, cid):
             raise HTTPException(404)
-        cur = await db.execute("SELECT id, name FROM contest_teams WHERE contest_id=?", (cid,))
-        teams = [dict(r) for r in await cur.fetchall()]
+        await db.execute("DELETE FROM contest_members WHERE contest_id=?", (cid,))
+        await db.execute("DELETE FROM contest_teams WHERE contest_id=?", (cid,))
         colors, names = ["#d83b3b", "#2f7ed8"], ["红队", "蓝队"]
-        while len(teams) < 2:
-            i = len(teams)
+        teams = []
+        for ti in range(2):
             cur = await db.execute(
                 "INSERT INTO contest_teams(contest_id,name,color,created_at) VALUES(?,?,?,?)",
-                (cid, names[i], colors[i], time.time()))
-            teams.append({"id": cur.lastrowid, "name": names[i]})
+                (cid, names[ti], colors[ti], time.time()))
+            teams.append({"id": cur.lastrowid, "name": names[ti]})
         random.shuffle(uids)
         a, b = uids[:5], uids[5:]
-        await db.execute("DELETE FROM contest_members WHERE contest_id=?", (cid,))
         for pos, uid in enumerate(a):
             await db.execute("INSERT INTO contest_members(contest_id,user_id,team_id,position) VALUES(?,?,?,?)",
                              (cid, uid, teams[0]["id"], pos))
@@ -2771,7 +2769,3 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000,
                 h11_max_incomplete_event_size=64*1024*1024,
                 limit_concurrency=200)
-
-# NOTE: two handlers used to live below this point — after uvicorn.run(), so they
-# were never registered. They also called get_current_user()/db.get_problem(),
-# neit
