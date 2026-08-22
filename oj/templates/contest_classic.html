@@ -73,8 +73,14 @@ function render(){
 }
 function classicCell(mode, cell, full){
   if(mode==='icpc'){
-    if(cell && cell.solved)
-      return `<td class="mono" style="color:#52c41a;font-weight:600">+${cell.time}${cell.attempts>1?' ('+cell.attempts+')':''}</td>`;
+    if(cell && cell.solved){
+      const tries = cell.attempts||1;
+      const fails = Math.max(0, tries-1);
+      const top = fails===0 ? '✓' : String(fails);
+      return `<td class="mono" style="color:#52c41a;font-weight:600;line-height:1.25">
+        <div>${top}</div>
+        <div style="font-size:11px;font-weight:400;color:#389e0d">${cell.time}′</div></td>`;
+    }
     if(cell && cell.attempts)
       return `<td class="mono" style="color:#d83b3b">-${cell.attempts}</td>`;
     return `<td class="muted">·</td>`;
