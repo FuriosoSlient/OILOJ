@@ -282,7 +282,7 @@ async def problem_visibility(db, problem, viewer, contest_id=None):
             phase = contest_phase(link)
             slot = link["slot"]
             mode = contest_mode(link)
-            if mode in ("ioi", "icpc"):
+            if mode in PERSONAL_MODES:
                 if phase == "before":
                     return {"visible": False, "reveal_difficulty": False, "reveal_hack_data": False,
                             "reason": "比赛尚未开始", "context": "contest"}
@@ -723,7 +723,7 @@ async def contest_page(cid: int, request: Request, user=Depends(current_user)):
         mode = contest_mode(c)
     finally:
         await db.close()
-    tpl = "contest.html" if mode == "oil" else "contest_classic.html"
+    tpl = "contest.html" if mode == "oil" else "contest_classic.html"  # ioi / icpc / oi
     return Render(tpl, request, user, active="contest", contest=c)
 
 @app.get("/user/{uid}", response_class=HTMLResponse)
@@ -884,6 +884,13 @@ async def api_problem(pid: int, contest_id: Optional[int] = None, user=Depends(c
             raise HTTPException(403, vis["reason"] or "无权查看该题目")
         out = strip_problem(p, vis)
         out["difficulty_hidden"] = not vis["reveal_difficulty"]
+        adir = BASE / "data" / "problems" / (p.get("slug") or f"p{pid}") / "attach"
+        atts = []
+        if adir.exists():
+            for f in sorted(adir.iterdir()):
+                if f.is_file() and not f.name.startswith("."):
+                    atts.append({"name": f.name, "size": f.stat().st_size})
+        out["attachments"] = atts
         # After the contest ends, publish the hack data submitted against this problem.
         if vis["reveal_hack_data"]:
             cur = await db.execute(
@@ -915,13 +922,18 @@ async def submission_access(db, sub, viewer):
       * spectators / other users      -> may see the row, never the detail
       * after the contest ends        -> 代码与测试点详情对所有人公开
     """
-    if viewer and sub["user_id"] == viewer["id"]:
-        return True, True
+    cid = sub.get("contest_id")
+    c = await fetch_contest(db, cid) if cid else None
     if is_admin(viewer):
         return True, True
+    if c and contest_mode(c) == "oi" and not await can_view_oi_results(db, c, viewer):
+        # 选手只能看到“已提交”，看不到评测结果
+        if viewer and sub["user_id"] == viewer["id"]:
+            return True, False
+        return False, False
+    if viewer and sub["user_id"] == viewer["id"]:
+        return True, True
 
-    cid = sub["contest_id"]
-    c = await fetch_contest(db, cid) if cid else None
     if viewer and cid:
         viewer = await apply_contest_roster(db, viewer, cid)
 
@@ -934,7 +946,7 @@ async def submission_access(db, sub, viewer):
         return True, True
     if c and contest_phase(c) == "after":
         return True, True
-    if c and contest_mode(c) in ("ioi", "icpc") and contest_phase(c) != "solve" and contest_phase(c) != "before":
+    if c and is_personal_mode(c) and contest_phase(c) != "solve" and contest_phase(c) != "before":
         return True, True
 
     if not cid or not c:
@@ -992,6 +1004,13 @@ async def api_submissions(limit: int = 50, problem_id: Optional[int] = None,
                 continue
             d["can_detail"] = can_detail
             d["kind"] = "submission"
+            if d.get("contest_id"):
+                cc = await fetch_contest(db, d["contest_id"])
+                if cc and contest_mode(cc) == "oi" and not await can_view_oi_results(db, cc, user):
+                    d["status"] = "SUBMITTED"
+                    d["score"] = None
+                    d["oi_hidden"] = True
+                    d["can_detail"] = False
             rows.append(d)
             if len(rows) >= limit:
                 break
@@ -1140,6 +1159,18 @@ async def api_submission(sid: int, user=Depends(current_user)):
             d["case_results"] = []
             d["verdict_detail"] = ""
             d["restricted"] = True
+        cid = d.get("contest_id")
+        if cid:
+            cc = await fetch_contest(db, cid)
+            if cc and contest_mode(cc) == "oi" and not await can_view_oi_results(db, cc, user):
+                d["status"] = "SUBMITTED"
+                d["score"] = None
+                d["subtask_scores"] = []
+                d["case_results"] = []
+                d["verdict_detail"] = ""
+                d.pop("code", None)
+                d["oi_hidden"] = True
+                d["restricted"] = True
         return d
     finally:
         await db.close()
@@ -1175,6 +1206,17 @@ async def api_submission_stream(sid: int, request: Request, user=Depends(current
             db2 = await get_db()
             try:
                 can_list, can_detail = await submission_access(db2, d, user)
+                if d.get("contest_id"):
+                    cc = await fetch_contest(db2, d["contest_id"])
+                    if cc and contest_mode(cc) == "oi" and not await can_view_oi_results(db2, cc, user):
+                        d["status"] = "SUBMITTED"
+                        d["score"] = None
+                        d["subtask_scores"] = []
+                        d["case_results"] = []
+                        d["verdict_detail"] = ""
+                        d["oi_hidden"] = True
+                        d["restricted"] = True
+                        can_detail = False
             finally:
                 await db2.close()
             if not can_list:
@@ -1224,7 +1266,7 @@ async def api_submit(problem_id: int = Form(...), code: str = Form(...), contest
             if not slot_for_pid:
                 raise HTTPException(403, "该题不在比赛中")
             mode = contest_mode(c)
-            if mode in ("ioi", "icpc"):
+            if is_personal_mode(c):
                 if phase != "solve":
                     raise HTTPException(403, "当前阶段不能提交")
                 if not is_admin(user):
@@ -1294,7 +1336,7 @@ async def api_contests(user=Depends(current_user)):
             except Exception:
                 c["registered_count"] = 0
             c["registered"] = False
-            if user and c["mode"] in ("ioi", "icpc"):
+            if user and c["mode"] in PERSONAL_MODES:
                 cur4 = await db.execute(
                     "SELECT 1 FROM contest_members WHERE contest_id=? AND user_id=?",
                     (c["id"], user["id"]))
@@ -1311,6 +1353,26 @@ def contest_end_ts(contest):
 
 def contest_mode(contest):
     return (contest.get("mode") or "oil").lower()
+
+
+PERSONAL_MODES = ("ioi", "icpc", "oi")
+
+
+def is_personal_mode(contest):
+    return contest_mode(contest) in PERSONAL_MODES
+
+
+async def can_view_oi_results(db, contest, viewer):
+    """OI: only admins / 本场负责人 see verdicts & rank during the contest."""
+    if not contest or contest_mode(contest) != "oi":
+        return True
+    if contest_phase(contest) == "after":
+        return True
+    if is_admin(viewer):
+        return True
+    if viewer and contest["id"] in await managed_contest_ids(db, viewer):
+        return True
+    return False
 
 
 async def contest_roster(db, cid):
@@ -1531,10 +1593,14 @@ async def compute_classic_state(db, contest, viewer=None):
 
     for i, r in enumerate(ranking, 1):
         r["rank"] = i
+    results_hidden = (mode == "oi" and not await can_view_oi_results(db, contest, viewer))
+    if results_hidden:
+        ranking = []
     return {
         "phase": phase, "now": now, "start": contest["start_time"],
         "remaining": phase_remaining(contest, now),
         "mode": mode, "problems": plist, "ranking": ranking,
+        "results_hidden": results_hidden,
         "members": ranking, "team_totals": {},
         "all_problems_summary": plist,
         "team_problem_score": {},
@@ -1579,7 +1645,7 @@ async def api_standings(cid: int, user=Depends(current_user)):
             c = await fetch_contest(db, cid)
         except Exception:
             pass
-        if contest_mode(c) in ("ioi", "icpc"):
+        if is_personal_mode(c):
             state = await compute_classic_state(db, c, user)
             end_ts = contest_end_ts(c)
             cur = await db.execute(
@@ -1596,6 +1662,7 @@ async def api_standings(cid: int, user=Depends(current_user)):
                     "is_rated": int(c.get("is_rated") or 0),
                     "teams": state["ranking"] if contest_mode(c)=="icpc" else [],
                     "ranking": state["ranking"],
+                    "results_hidden": bool(state.get("results_hidden")),
                     "problems": state["problems"], "series": series}
         state = await compute_oil_state(db, c, user)
         end_ts = contest_end_ts(c)
@@ -1644,14 +1711,14 @@ async def api_contest(cid: int, user=Depends(current_user)):
             c = await fetch_contest(db, cid)
         except Exception:
             pass
-        if contest_mode(c) in ("ioi", "icpc"):
+        if is_personal_mode(c):
             state = await compute_classic_state(db, c, user)
         else:
             state = await compute_oil_state(db, c, user)
         c["state"] = state
         c["mode"] = contest_mode(c)
         c["is_rated"] = int(c.get("is_rated") or 0)
-        c["registered"] = bool(state.get("viewer_registered")) if contest_mode(c) in ("ioi", "icpc") else False
+        c["registered"] = bool(state.get("viewer_registered")) if is_personal_mode(c) else False
         c["registered_count"] = int(state.get("registered_count") or 0)
         c.pop("problems", None)
         return c
@@ -1666,7 +1733,7 @@ async def api_contest_register(cid: int, user=Depends(current_user)):
         c = await fetch_contest(db, cid)
         if not c:
             raise HTTPException(404)
-        if contest_mode(c) not in ("ioi", "icpc"):
+        if not is_personal_mode(c):
             raise HTTPException(400, "OIL 比赛由管理员分队，无需报名")
         if contest_phase(c) == "after":
             raise HTTPException(403, "比赛已结束，无法报名")
@@ -1687,7 +1754,7 @@ async def api_contest_unregister(cid: int, user=Depends(current_user)):
         c = await fetch_contest(db, cid)
         if not c:
             raise HTTPException(404)
-        if contest_mode(c) not in ("ioi", "icpc"):
+        if not is_personal_mode(c):
             raise HTTPException(400, "OIL 比赛不能自行退赛")
         if contest_phase(c) != "before":
             raise HTTPException(403, "比赛开始后不能取消报名")
@@ -1755,7 +1822,7 @@ async def api_stream(cid: int, request: Request, user=Depends(current_user)):
                 c = await fetch_contest(db, cid)
                 if not c:
                     break
-                if contest_mode(c) in ("ioi", "icpc"):
+                if is_personal_mode(c):
                     state = await compute_classic_state(db, c, user)
                 else:
                     state = await compute_oil_state(db, c, user)
@@ -2030,6 +2097,8 @@ async def admin_save_problem(
     spj_source: str = Form(""),
     std_source: str = Form(""),
     author: Optional[str] = Form(None),
+    file_io_in: str = Form(""),
+    file_io_out: str = Form(""),
     user=Depends(current_user),
 ):
     """Create or update a problem. Subtasks arrive as a JSON array."""
@@ -2082,6 +2151,8 @@ async def admin_save_problem(
             tags=tags, position=position, interactive=1 if interactive else 0,
             subtasks=json.dumps(sts, ensure_ascii=False),
             checker_type=checker_type if checker_type in ("token", "spj", "interactive") else "token",
+            file_io_in=os.path.basename((file_io_in or "").strip()),
+            file_io_out=os.path.basename((file_io_out or "").strip()),
         )
         # Persist the SPJ source next to the problem data so the judge can build it.
         pdir = BASE / "data" / "problems" / slug
@@ -2154,6 +2225,67 @@ async def admin_upload_testdata(pid: int, files: list[UploadFile] = File(...), u
             (pdir / name).write_bytes(data)
         saved.append(name)
     return {"ok": True, "saved": saved}
+
+
+@app.post("/api/admin/problem/{pid}/attach")
+async def admin_upload_attach(pid: int, files: list[UploadFile] = File(...), user=Depends(current_user)):
+    db = await get_db()
+    try:
+        await require_problem_owner(db, user, pid)
+        p = await fetch_problem(db, pid)
+        if not p:
+            raise HTTPException(404)
+    finally:
+        await db.close()
+    adir = BASE / "data" / "problems" / p["slug"] / "attach"
+    adir.mkdir(parents=True, exist_ok=True)
+    saved = []
+    for f in files:
+        name = os.path.basename(f.filename or "")
+        if not name or "/" in name or ".." in name:
+            continue
+        data = await f.read()
+        if len(data) > 32 * 1024 * 1024:
+            continue
+        (adir / name).write_bytes(data)
+        saved.append(name)
+    return {"ok": True, "saved": saved}
+
+
+@app.post("/api/admin/problem/{pid}/attach/delete")
+async def admin_delete_attach(pid: int, name: str = Form(...), user=Depends(current_user)):
+    db = await get_db()
+    try:
+        await require_problem_owner(db, user, pid)
+        p = await fetch_problem(db, pid)
+        if not p:
+            raise HTTPException(404)
+    finally:
+        await db.close()
+    name = os.path.basename(name)
+    f = BASE / "data" / "problems" / p["slug"] / "attach" / name
+    if f.exists() and f.is_file():
+        f.unlink()
+    return {"ok": True}
+
+
+@app.get("/api/problem/{pid}/attach/{name}")
+async def download_attach(pid: int, name: str, contest_id: Optional[int] = None, user=Depends(current_user)):
+    db = await get_db()
+    try:
+        p = await fetch_problem(db, pid)
+        if not p:
+            raise HTTPException(404)
+        vis = await problem_visibility(db, p, user, contest_id)
+        if not vis["visible"]:
+            raise HTTPException(403, "无权下载附件")
+    finally:
+        await db.close()
+    name = os.path.basename(name)
+    f = BASE / "data" / "problems" / p["slug"] / "attach" / name
+    if not f.exists() or not f.is_file():
+        raise HTTPException(404, "附件不存在")
+    return FileResponse(str(f), filename=name)
 
 
 @app.post("/api/admin/problem/{pid}/autodetect")
@@ -2304,13 +2436,13 @@ async def admin_save_contest(
         else:
             require_admin(user)          # only admins create contests
         md = (mode or "oil").lower()
-        if md not in ("oil", "ioi", "icpc"):
+        if md not in ("oil", "ioi", "icpc", "oi"):
             md = "oil"
         rated = 1 if (is_admin(user) and int(is_rated or 0)) else 0
         if id and not is_admin(user):
             prev = await fetch_contest(db, id)
             rated = int(prev.get("is_rated") or 0) if prev else 0
-        if md in ("ioi", "icpc"):
+        if md in PERSONAL_MODES:
             hack_duration = 0
         if id:
             await db.execute(
@@ -2631,10 +2763,13 @@ def run_judge_sync(sid):
     try:
         row = con.execute(
             "SELECT s.code AS _code, p.id, p.slug, p.time_limit, p.memory_limit, p.subtasks, "
-            "p.validator, p.interactive, p.score_total, p.checker_type "
+            "p.validator, p.interactive, p.score_total, p.checker_type, "
+            "p.file_io_in, p.file_io_out "
             "FROM submissions s JOIN problems p ON p.id=s.problem_id WHERE s.id=?", (sid,)).fetchone()
         if not row: return
-        p = {k: row[k] for k in ("id","slug","time_limit","memory_limit","subtasks","validator","interactive","score_total","checker_type")}
+        keys = ("id","slug","time_limit","memory_limit","subtasks","validator","interactive",
+                "score_total","checker_type","file_io_in","file_io_out")
+        p = {k: (row[k] if k in row.keys() else "") for k in keys}
         p["subtasks"] = json.loads(p["subtasks"] or "[]")
         code = row["_code"]
 

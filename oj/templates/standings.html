@@ -184,6 +184,13 @@ function classicCell(mode, cell, full){
   return `<td class="mono" style="color:${ok?'#52c41a':'#d48806'};font-weight:600">${v}${full?`/${full}`:''}</td>`;
 }
 function renderClassic(){
+  if(S.results_hidden){
+    document.getElementById('detail').innerHTML=
+      '<div class="alert alert-info">OI 赛制：赛时不公布榜单，结束后公开。管理员与本场负责人可查看。</div>';
+    const ct=document.getElementById('card-teams'); if(ct) ct.style.display='none';
+    const cc=document.getElementById('card-chart'); if(cc) cc.style.display='none';
+    return;
+  }
   const rank=S.ranking||[];
   const icpc=S.mode==='icpc';
   const probs=S.problems||[];

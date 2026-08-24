@@ -181,6 +181,10 @@ def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb):
 
     stdout = (out_buf[0] if out_buf else b"").decode(errors="replace")
     stderr = (err_buf[0] if err_buf else b"").decode(errors="replace")
+    if work and fout:
+        fp = work / fout
+        if fp.exists():
+            stdout = read_text(fp)
 
     if sys.platform == "darwin":       # macOS reports bytes, Linux kilobytes
         max_rss_kb //= 1024
@@ -227,6 +231,8 @@ def judge_submission(problem, code, hack_input=None, progress=None):
         ml = problem.get("memory_limit", 256)
         validator_src = problem.get("validator")
         interactive = problem.get("interactive", 0)
+        fio_in = safe_io_name(problem.get("file_io_in") or "")
+        fio_out = safe_io_name(problem.get("file_io_out") or "")
 
         # Compile custom validator/interactor if present.
         # For interactive problems, `validator` points to an already-compiled interactor binary.
@@ -286,7 +292,8 @@ def judge_submission(problem, code, hack_input=None, progress=None):
                         "subtask_scores": [100 if ok else 0],
                         "case_results": [{"status": "AC" if ok else "WA", "message": msg}],
                         "message": msg}
-            rc, out, err, status, elapsed, _ = run_process(str(binp), inp, tl, ml)
+            rc, out, err, status, elapsed, _ = run_process(
+                str(binp), inp, tl, ml, cwd=str(work), file_in=fio_in or None, file_out=fio_out or None)
             if status != "AC":
                 return {"status": status, "score": 0, "subtask_scores": [0],
                         "case_results": [{"status": status, "time": elapsed}], "message": ""}
@@ -310,7 +317,9 @@ def judge_submission(problem, code, hack_input=None, progress=None):
                 if not ref_bin.exists() and ref_src.exists():
                     compile_cpp(str(ref_src), str(ref_bin))
                 if ref_bin.exists():
-                    rrc, rout, rerr, rstatus, _, _ = run_process(str(ref_bin), inp, max(tl, 10000), ml)
+                    rrc, rout, rerr, rstatus, _, _ = run_process(
+                        str(ref_bin), inp, max(tl, 10000), ml,
+                        cwd=str(work), file_in=fio_in or None, file_out=fio_out or None)
                     if rstatus == "AC":
                         expected = rout
                     else:
@@ -553,9 +562,10 @@ def _build_checker(problem, pdir, work):
     return None, ""
 
 
-def _run_one(binp, inp, tl, ml, label):
+def _run_one(binp, inp, tl, ml, label, cwd=None, file_in=None, file_out=None):
     """Execute a program once and package the outcome for the UI."""
-    rc, out, err, status, elapsed, rss = run_process(str(binp), inp, tl, ml)
+    rc, out, err, status, elapsed, rss = run_process(
+        str(binp), inp, tl, ml, cwd=cwd, file_in=file_in, file_out=file_out)
     return {
         "label": label,
         "status": status,
@@ -705,3 +715,4 @@ def compile_cpp_source(code, out_bin, work, filename="tmp.cpp"):
     src = work / filename
     write_text(src, code)
     return compile_cpp(str(src), str(out_bin))
+

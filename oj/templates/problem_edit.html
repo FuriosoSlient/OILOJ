@@ -39,7 +39,8 @@ async function editProblem(pid){
            samples:'',sample_groups:[],
            constraints:'',time_limit:1000,memory_limit:256,problem_type:'standard',score_total:100,
            difficulty:'',is_public:0,tags:'',position:null,interactive:0,subtasks:[],
-           checker_type:'token',spj_source:'',spj_compiled:0,spj_log:'',author:'',std_source:''};
+           checker_type:'token',spj_source:'',spj_compiled:0,spj_log:'',author:'',std_source:'',
+           file_io_in:'',file_io_out:'',attachments:[]};
   if(pid){ const r = await API.get(`/api/admin/problem/${pid}`); p = r.problem; }
   editing = p;
   const diffOpts = ['',...DIFFICULTIES].map(d=>
@@ -53,7 +54,7 @@ async function editProblem(pid){
             <input type="text" id="f_title" value="${esc(p.title)}"></div>
           <div class="form-group"><label>Slug（数据目录名）</label>
             <input type="text" id="f_slug" value="${esc(p.slug||'')}">
-            <span class="form-hint">data/problems/&lt;slug&gt;/</span></div>
+            <span class="form-hint">数据目录名，与文件 IO 文件名无关</span></div>
           <div class="form-group"><label>类型</label>
             <select id="f_type">
               ${['standard','personal','thinking','mystery'].map(t=>
@@ -121,6 +122,29 @@ async function editProblem(pid){
           </div>
           <div id="spj-log">${p.spj_log?`<div class="spj-log ${p.spj_compiled?'spj-ok':'spj-err'}">${esc(p.spj_log)}</div>`:''}</div>
         </div>
+
+        <h3 style="margin:16px 0 8px;font-size:14px;">文件流 IO（可选）</h3>
+        <div class="form-hint" style="margin-bottom:8px">
+          选手程序用文件读写而不是标准输入输出时填写。文件名可任意指定（例如 <code>problem1.in</code> / <code>problem1.out</code>），不必与 slug 相同。留空则使用 stdin/stdout。
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>输入文件名</label>
+            <input type="text" id="f_fio_in" value="${esc(p.file_io_in||'')}" placeholder="problem1.in"></div>
+          <div class="form-group"><label>输出文件名</label>
+            <input type="text" id="f_fio_out" value="${esc(p.file_io_out||'')}" placeholder="problem1.out"></div>
+        </div>
+
+        ${pid?`
+        <h3 style="margin:16px 0 8px;font-size:14px;">附件</h3>
+        <div class="form-hint" style="margin-bottom:8px">题面附加文件（PDF、图片、额外说明等），选手可在题目页下载。</div>
+        <div id="attach-list">${(p.attachments||[]).map(a=>`
+          <span class="file-chip">${esc(a.name)} <span class="muted">${a.size}B</span>
+            <button type="button" onclick="delAttach(${pid},'${esc(a.name)}')">×</button></span>`).join('')||'<span class="muted">暂无附件</span>'}</div>
+        <div class="form-row mt10">
+          <div class="form-group"><input type="file" id="f_attach" multiple></div>
+          <div class="form-group" style="flex:0 0 auto;justify-content:flex-end">
+            <button type="button" class="btn btn-sm btn-default" onclick="uploadAttach(${pid})">上传附件</button></div>
+        </div>`:''}
 
         <h3 style="margin:16px 0 8px;font-size:14px;">标程 std（Hack 必需）</h3>
         <div class="form-hint" style="margin-bottom:8px">
@@ -305,6 +329,7 @@ async function saveProblem(quiet){
     score_total:g('f_score'), difficulty:g('f_diff'), is_public:g('f_public'),
     tags:g('f_tags'), interactive:g('f_inter'),
     checker_type:g('f_checker'), spj_source:g('f_spj'), std_source:g('f_std'), author:g('f_author'),
+    file_io_in:g('f_fio_in'), file_io_out:g('f_fio_out'),
     subtasks: JSON.stringify(editing.subtasks||[]),
   };
   const pos=g('f_pos'); if(pos!=='') payload.position=pos;

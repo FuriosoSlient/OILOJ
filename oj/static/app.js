@@ -88,6 +88,7 @@ async function postHackForm(url, fields, taId){
 
 function statusBadge(status, score){
   if(status==='AC') return `<span class="badge badge-AC">Accepted</span>`;
+  if(status==='SUBMITTED') return `<span class="badge badge-PENDING">已提交</span>`;
   if(status==='CE') return `<span class="badge badge-CE">Compilation Error</span>`;
   if(status==='PENDING') return `<span class="badge badge-PENDING">Pending</span>`;
   if(status==='JUDGING') return `<span class="badge badge-PENDING"><span class="live-dot"></span>Judging</span>`;

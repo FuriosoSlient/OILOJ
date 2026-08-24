@@ -68,7 +68,9 @@ function render(){
     </div>
     <div class="card">
       <div class="card-header">实时榜单</div>
-      <div style="overflow-x:auto">${classicBoard(s, C)}</div>
+      <div style="overflow-x:auto">${s.results_hidden
+        ? '<div class="alert alert-info" style="margin:12px">OI 赛制：赛时不公布评测结果与榜单，结束后公开。管理员 / 本场负责人仍可查看。</div>'
+        : classicBoard(s, C)}</div>
     </div>`;
 }
 function classicCell(mode, cell, full){

@@ -130,6 +130,9 @@ async function doSubmit(){
         document.getElementById('result').innerHTML=
           `<div class="alert alert-info"><span class="live-dot"></span>提交 #${s.id} 评测中${done?`（已完成 ${done} 个测试点）`:'...'}
            ${renderCaseGrid(s.case_results||[])}</div>`;
+      } else if(s.oi_hidden || s.status==='SUBMITTED'){
+        document.getElementById('result').innerHTML=
+          `<div class="alert alert-info">提交 #${s.id} 已受理。OI 赛制赛时不公布评测结果，结束后可查看。</div>`;
       } else {
         const cls = s.status==='AC'?'success':(s.score>0?'warn':'error');
         document.getElementById('result').innerHTML=

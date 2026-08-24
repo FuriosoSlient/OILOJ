@@ -210,6 +210,8 @@ MIGRATIONS = [
     ("users", "rating", "INTEGER DEFAULT 1500"),
     ("contests", "is_rated", "INTEGER DEFAULT 0"),
     ("contests", "rating_applied", "INTEGER DEFAULT 0"),
+    ("problems", "file_io_in", "TEXT DEFAULT ''"),
+    ("problems", "file_io_out", "TEXT DEFAULT ''"),
 ]
 
 
