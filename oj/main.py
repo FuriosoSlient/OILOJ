@@ -336,6 +336,7 @@ def strip_problem(problem, vis):
         d["difficulty"] = ""
     if not vis["reveal_hack_data"]:
         d.pop("validator", None)
+        d.pop("hack_validator", None)
     return d
 
 async def compute_oil_state(db, contest, viewer=None):
