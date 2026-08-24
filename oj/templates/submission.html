@@ -51,9 +51,20 @@ async function render(){
   document.getElementById('ptitle').textContent = `提交 #${s.id}`;
 
   let subtaskHtml = '';
-  if(s.subtask_scores && s.subtask_scores.length){
-    let p = null;
-    try{ p = (await API.get('/api/problem/' + s.problem_id)).problem; }catch(e){}
+  let p = null;
+  try{ p = (await API.get('/api/problem/' + s.problem_id)).problem; }catch(e){}
+  const perCase = p && (p.use_subtasks==0 || (p.subtasks&&p.subtasks[0]&&p.subtasks[0].per_case));
+  if(perCase && s.case_results && s.case_results.length){
+    subtaskHtml = '<table><thead><tr><th>#</th><th>测试点</th><th>结果</th><th>得分</th></tr></thead><tbody>' +
+      s.case_results.map((c,i)=>{
+        const mx=c.max_score!=null?c.max_score:0;
+        const got=c.score!=null?c.score:(c.status==='AC'?mx:0);
+        const cls = c.status==='AC' ? 'subtask-ok' : 'muted';
+        return `<tr><td class="mono">${i+1}</td><td class="mono">${esc(c.case||'')}</td>
+          <td>${statusBadge(c.status)}</td>
+          <td class="mono ${cls}"><strong>${got}</strong> / ${mx}</td></tr>`;
+      }).join('') + '</tbody></table>';
+  } else if(s.subtask_scores && s.subtask_scores.length){
     subtaskHtml = '<table><thead><tr><th>子任务</th><th>名称</th><th>得分</th></tr></thead><tbody>' +
       s.subtask_scores.map((sc,i)=>{
         const st = (p && p.subtasks && p.subtasks[i]) || {name:'#'+(i+1), score:'?'};

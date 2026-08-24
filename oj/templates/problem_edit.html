@@ -40,7 +40,7 @@ async function editProblem(pid){
            constraints:'',time_limit:1000,memory_limit:256,problem_type:'standard',score_total:100,
            difficulty:'',is_public:0,tags:'',position:null,interactive:0,subtasks:[],
            checker_type:'token',spj_source:'',spj_compiled:0,spj_log:'',author:'',std_source:'',
-           file_io_in:'',file_io_out:'',attachments:[]};
+           file_io_in:'',file_io_out:'',use_subtasks:1,hack_validator:'',attachments:[]};
   if(pid){ const r = await API.get(`/api/admin/problem/${pid}`); p = r.problem; }
   editing = p;
   const diffOpts = ['',...DIFFICULTIES].map(d=>
@@ -172,11 +172,28 @@ async function editProblem(pid){
         <button class="btn btn-sm btn-default" onclick="addSample()">+ 添加样例组</button>
         ${mdField('数据范围与约定','f_cons',p.constraints)}
 
-        <h3 style="margin:16px 0 8px;font-size:14px;">子任务与测试点</h3>
+        <h3 style="margin:16px 0 8px;font-size:14px;">评测结构</h3>
+        <div class="form-row">
+          <div class="form-group" style="flex:0 0 220px"><label>开启子任务</label>
+            <select id="f_use_sub" onchange="onUseSubChange()">
+              <option value="1" ${p.use_subtasks!=0?'selected':''}>开启（按子任务赋分）</option>
+              <option value="0" ${p.use_subtasks==0?'selected':''}>关闭（按测试点赋分）</option>
+            </select>
+            <span class="form-hint">关闭后 <code>0_0.in</code> 只是测试点名，不会变成第 0 个子任务</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Hack 数据校验器（C++ / testlib，选填）</label>
+          <span class="form-hint">不论是否开启子任务，Hack 都会先跑这份校验器；不通过则判定非法数据。开启子任务时也可在各子任务里另写校验器。</span>
+          <textarea id="f_hack_val" rows="6" spellcheck="false">${esc(p.hack_validator||'')}</textarea>
+        </div>
         <div id="subtasks"></div>
-        <button class="btn btn-sm btn-default" onclick="addSubtask()">+ 添加子任务</button>
-        ${pid?`<button class="btn btn-sm btn-default" onclick="autodetect(${pid})">🔍 从数据目录自动识别</button>`:
-              '<span class="muted" style="margin-left:8px">保存后可上传测试数据并自动识别</span>'}
+        <div class="flex gap8" style="flex-wrap:wrap">
+          <button class="btn btn-sm btn-default" id="btn-add-st" onclick="addSubtask()">+ 添加子任务</button>
+          <button class="btn btn-sm btn-default" onclick="evenSplitUI()">一键均分（洛谷式）</button>
+          ${pid?`<button class="btn btn-sm btn-default" onclick="autodetect(${pid})">🔍 从数据目录自动识别</button>`:
+                '<span class="muted">保存后可上传测试数据并自动识别</span>'}
+        </div>
 
         <div class="mt10" style="border-top:1px solid #e3e9ef;padding-top:12px;">
           <button class="btn btn-primary" onclick="saveProblem()">保存题目</button>
@@ -277,7 +294,85 @@ function addSample(){
   renderSampleEditor();
 }
 
+function useSubOn(){
+  const el=document.getElementById('f_use_sub');
+  return el ? el.value==='1' : (editing.use_subtasks!=0);
+}
+function flattenCases(){
+  const out=[];
+  (editing.subtasks||[]).forEach(st=>{
+    (st.testcases||[]).forEach(c=>out.push({
+      input:c.input||'', output:c.output||'', score:parseInt(c.score||0)||0
+    }));
+  });
+  return out;
+}
+function evenSplitArr(total,n){
+  total=parseInt(total)||0; n=parseInt(n)||0;
+  if(n<=0) return [];
+  const base=Math.floor(Math.max(0,total)/n);
+  let rem=Math.max(0,total)%n;
+  const arr=Array(n).fill(base);
+  for(let i=n-1;i>=0 && rem>0;i--){ arr[i]+=1; rem--; }
+  return arr;
+}
+function evenSplitUI(){
+  const total=parseInt(document.getElementById('f_score').value)||0;
+  if(useSubOn()){
+    const n=(editing.subtasks||[]).length;
+    if(!n){ toast('没有子任务','error'); return; }
+    const arr=evenSplitArr(total,n);
+    editing.subtasks.forEach((st,i)=>st.score=arr[i]);
+    renderSubtaskEditor();
+    toast('已按子任务均分','success');
+  }else{
+    const cases=flattenCases();
+    if(!cases.length){ toast('没有测试点','error'); return; }
+    const arr=evenSplitArr(total,cases.length);
+    cases.forEach((c,i)=>c.score=arr[i]);
+    editing.subtasks=[{name:'测试点',score:0,per_case:true,testcases:cases,
+                       validator:document.getElementById('f_hack_val').value||''}];
+    renderSubtaskEditor();
+    toast('已按测试点均分（余数从后往前 +1）','success');
+  }
+}
+function onUseSubChange(){
+  const on=useSubOn();
+  const cases=flattenCases();
+  if(on){
+    if(!editing.subtasks || (editing.subtasks.length===1 && editing.subtasks[0].per_case)){
+      editing.subtasks=[{name:'Subtask 1',score:parseInt(document.getElementById('f_score').value)||0,
+                         testcases:cases.map(c=>({input:c.input,output:c.output})),validator:''}];
+    }
+  }else{
+    editing.subtasks=[{name:'测试点',score:0,per_case:true,testcases:cases,
+                       validator:document.getElementById('f_hack_val').value||''}];
+  }
+  renderSubtaskEditor();
+}
 function renderSubtaskEditor(){
+  const addBtn=document.getElementById('btn-add-st');
+  if(addBtn) addBtn.style.display=useSubOn()?'inline-flex':'none';
+  if(!useSubOn()){
+    const cases=flattenCases();
+    if(!editing.subtasks||!editing.subtasks.length)
+      editing.subtasks=[{name:'测试点',score:0,per_case:true,testcases:cases}];
+    editing.subtasks[0].per_case=true;
+    editing.subtasks[0].testcases=cases;
+    document.getElementById('subtasks').innerHTML = `
+      <div class="form-hint" style="margin-bottom:8px">为每个测试点赋分。文件名如 <code>0_0.in</code> 仅作编号，不会开成第 0 个子任务。</div>
+      <table><thead><tr><th>#</th><th>输入</th><th>输出</th><th>分值</th><th></th></tr></thead><tbody>
+        ${cases.map((c,i)=>`<tr>
+          <td class="mono">${i+1}</td>
+          <td><input type="text" value="${esc(c.input||'')}" onchange="setFlatCase(${i},'input',this.value)"></td>
+          <td><input type="text" value="${esc(c.output||'')}" onchange="setFlatCase(${i},'output',this.value)"></td>
+          <td style="width:90px"><input type="number" value="${c.score||0}" onchange="setFlatCase(${i},'score',parseInt(this.value)||0)"></td>
+          <td><button class="btn btn-sm btn-danger" onclick="delFlatCase(${i})">删除</button></td>
+        </tr>`).join('')||'<tr><td colspan="5" class="muted">暂无测试点。可自动识别或手动添加。</td></tr>'}
+      </tbody></table>
+      <button class="btn btn-sm btn-default mt10" onclick="addFlatCase()">+ 添加测试点</button>`;
+    return;
+  }
   const sts = editing.subtasks||[];
   document.getElementById('subtasks').innerHTML = sts.map((st,i)=>`
     <div class="subtask-editor">
@@ -298,6 +393,25 @@ function renderSubtaskEditor(){
           onchange="editing.subtasks[${i}].validator=this.value">${esc(st.validator||'')}</textarea></div>
     </div>`).join('') || '<div class="muted">暂无子任务。无子任务的题目将无法获得分数。</div>';
 }
+function setFlatCase(i,key,val){
+  const cases=flattenCases();
+  if(!cases[i]) return;
+  cases[i][key]=val;
+  editing.subtasks=[{name:'测试点',score:0,per_case:true,testcases:cases,
+                     validator:document.getElementById('f_hack_val').value||''}];
+}
+function addFlatCase(){
+  const cases=flattenCases();
+  cases.push({input:'',output:'',score:0});
+  editing.subtasks=[{name:'测试点',score:0,per_case:true,testcases:cases}];
+  renderSubtaskEditor();
+}
+function delFlatCase(i){
+  const cases=flattenCases();
+  cases.splice(i,1);
+  editing.subtasks=[{name:'测试点',score:0,per_case:true,testcases:cases}];
+  renderSubtaskEditor();
+}
 function setCases(i,val){
   editing.subtasks[i].testcases = val.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{
     const parts=l.split(/\s+/);
@@ -311,10 +425,16 @@ function addSubtask(){
 }
 async function autodetect(pid){
   try{
+    await saveProblem(true);
     const r = await API.post(`/api/admin/problem/${pid}/autodetect`,{});
     editing.subtasks = r.subtasks;
+    if(r.use_subtasks!=null){
+      const sel=document.getElementById('f_use_sub');
+      if(sel) sel.value=r.use_subtasks? '1':'0';
+    }
     renderSubtaskEditor();
-    toast('已识别 '+r.subtasks.length+' 个子任务','success');
+    const n=(r.subtasks||[]).reduce((a,st)=>a+(st.testcases||[]).length,0);
+    toast(r.use_subtasks?`已识别 ${r.subtasks.length} 个子任务`:`已识别 ${n} 个测试点`,'success');
   }catch(e){ toast(e.message,'error'); }
 }
 

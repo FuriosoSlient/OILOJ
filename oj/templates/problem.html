@@ -103,7 +103,19 @@ function renderCaseGrid(cases){
   }).join('')+'</div>';
 }
 
-function renderSubtasks(subtask_scores){
+function perCaseMode(){
+  return problem && (problem.use_subtasks==0 || (problem.subtasks&&problem.subtasks[0]&&problem.subtasks[0].per_case));
+}
+function renderSubtasks(subtask_scores, cases){
+  if(perCaseMode() && cases && cases.length){
+    return '<div class="mt10">'+cases.map((c,i)=>{
+      const mx=c.max_score!=null?c.max_score:0;
+      const got=c.score!=null?c.score:(c.status==='AC'?mx:0);
+      const cls = c.status==='AC' ? 'subtask-ok' : 'muted';
+      return `<div class="subtask-row"><span class="subtask-name">${esc(c.case||('#'+(i+1)))}</span>
+        <span class="subtask-score ${cls}">${got} / ${mx} · ${esc(c.status||'')}</span></div>`;
+    }).join('')+'</div>';
+  }
   if(!problem.subtasks||!problem.subtasks.length) return '';
   return '<div class="mt10">'+problem.subtasks.map((st,i)=>{
     const got=subtask_scores[i]||0;
@@ -139,7 +151,7 @@ async function doSubmit(){
           `<div class="alert alert-${cls}">
             <div><strong>#${s.id} ${statusBadge(s.status,s.score).replace(/badge /,'badge')}</strong> 得分：${s.score}</div>
             ${s.verdict_detail?`<pre style="margin-top:6px;white-space:pre-wrap;">${esc(s.verdict_detail)}</pre>`:''}
-            ${renderSubtasks(s.subtask_scores||[])}
+            ${renderSubtasks(s.subtask_scores||[], s.case_results||[])}
             ${renderCaseGrid(s.case_results||[])}
           </div>`;
       }
@@ -215,9 +227,13 @@ async function loadSubs(){
       ${sec('输出格式',problem.output_format)}
       ${renderSampleGroups(problem.sample_groups, problem.samples)}
       ${sec('数据范围与约定',problem.constraints)}
-      ${problem.subtasks&&problem.subtasks.length?`
+      ${problem.use_subtasks==0 ? `
+      <h2>测试点分值</h2>
+      ${((problem.subtasks||[])[0]&&(problem.subtasks[0].testcases)||[]).map((c,i)=>
+        `<p><strong>#${i+1}</strong> ${esc(c.input||'')}：${c.score||0} 分</p>`).join('')||'<p class="muted">未配置测试点分值</p>'}` :
+      (problem.subtasks&&problem.subtasks.length?`
       <h2>子任务</h2>
-      ${problem.subtasks.map((st,i)=>`<p><strong>子任务 ${i+1}</strong>（${st.score} 分）：${esc(st.name)}</p>`).join('')}`:''}
+      ${problem.subtasks.map((st,i)=>`<p><strong>子任务 ${i+1}</strong>（${st.score} 分）：${esc(st.name)}</p>`).join('')}`:'')}
       ${hackSec}
     </div>`;
   loadSubs();

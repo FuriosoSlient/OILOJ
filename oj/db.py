@@ -212,6 +212,8 @@ MIGRATIONS = [
     ("contests", "rating_applied", "INTEGER DEFAULT 0"),
     ("problems", "file_io_in", "TEXT DEFAULT ''"),
     ("problems", "file_io_out", "TEXT DEFAULT ''"),
+    ("problems", "use_subtasks", "INTEGER DEFAULT 1"),
+    ("problems", "hack_validator", "TEXT DEFAULT ''"),
 ]
 
 

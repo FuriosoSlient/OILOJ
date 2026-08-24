@@ -1503,11 +1503,16 @@ async def persist_successful_hack_subtask(db, problem, hid, hack_input, expected
     (pdir / in_name).write_text(hack_input or "", encoding="utf-8", newline="\n")
     (pdir / out_name).write_text(expected_out or "", encoding="utf-8", newline="\n")
     sts = list(problem.get("subtasks") or [])
-    sts.append({
-        "name": f"Hack #{hid}",
-        "score": 0,
-        "testcases": [{"input": in_name, "output": out_name}],
-    })
+    extra = {"input": in_name, "output": out_name, "score": 0}
+    try:
+        use_sub = int(problem.get("use_subtasks") if problem.get("use_subtasks") is not None else 1)
+    except Exception:
+        use_sub = 1
+    if not use_sub and sts:
+        sts[0].setdefault("testcases", []).append(extra)
+        sts[0]["per_case"] = True
+    else:
+        sts.append({"name": f"Hack #{hid}", "score": 0, "testcases": [extra]})
     await db.execute("UPDATE problems SET subtasks=? WHERE id=?",
                      (json.dumps(sts, ensure_ascii=False), problem["id"]))
     await db.commit()
@@ -2099,6 +2104,8 @@ async def admin_save_problem(
     author: Optional[str] = Form(None),
     file_io_in: str = Form(""),
     file_io_out: str = Form(""),
+    use_subtasks: int = Form(1),
+    hack_validator: str = Form(""),
     user=Depends(current_user),
 ):
     """Create or update a problem. Subtasks arrive as a JSON array."""
@@ -2153,6 +2160,8 @@ async def admin_save_problem(
             checker_type=checker_type if checker_type in ("token", "spj", "interactive") else "token",
             file_io_in=os.path.basename((file_io_in or "").strip()),
             file_io_out=os.path.basename((file_io_out or "").strip()),
+            use_subtasks=1 if int(use_subtasks or 0) else 0,
+            hack_validator=hack_validator or "",
         )
         # Persist the SPJ source next to the problem data so the judge can build it.
         pdir = BASE / "data" / "problems" / slug
@@ -2288,9 +2297,25 @@ async def download_attach(pid: int, name: str, contest_id: Optional[int] = None,
     return FileResponse(str(f), filename=name)
 
 
+def even_split_scores(total, n):
+    """Luogu-style: floor(avg), then +1 from the back until the sum matches."""
+    total = int(total or 0)
+    n = int(n or 0)
+    if n <= 0:
+        return []
+    base, rem = divmod(max(0, total), n)
+    arr = [base] * n
+    for i in range(n - 1, -1, -1):
+        if rem <= 0:
+            break
+        arr[i] += 1
+        rem -= 1
+    return arr
+
+
 @app.post("/api/admin/problem/{pid}/autodetect")
 async def admin_autodetect(pid: int, user=Depends(current_user)):
-    """Scan the data dir and build subtasks from `{sub}_{case}.in` naming."""
+    """Scan data dir: each .in is a test point. `0_0.in` is NOT a subtask."""
     db = await get_db()
     try:
         await require_problem_owner(db, user, pid)
@@ -2299,30 +2324,29 @@ async def admin_autodetect(pid: int, user=Depends(current_user)):
         pdir = BASE / "data" / "problems" / p["slug"]
         if not pdir.exists():
             raise HTTPException(400, "题目数据目录不存在")
-        groups = {}
+        cases = []
         for f in sorted(pdir.glob("*.in")):
-            stem = f.stem
-            sub = 0
-            if "_" in stem:
-                head = stem.split("_")[0]
-                if head.isdigit():
-                    sub = int(head)
-            out = pdir / (stem + ".out")
-            groups.setdefault(sub, []).append(
-                {"input": f.name, "output": out.name if out.exists() else ""})
-        if not groups:
+            if f.name.startswith("hack_"):
+                continue
+            out = pdir / (f.stem + ".out")
+            cases.append({"input": f.name, "output": out.name if out.exists() else "", "score": 0})
+        if not cases:
             raise HTTPException(400, "未找到任何 .in 文件")
         total = p["score_total"] or 100
-        keys = sorted(groups)
-        per = total // len(keys)
-        sts = []
-        for i, k in enumerate(keys):
-            score = per if i < len(keys) - 1 else total - per * (len(keys) - 1)
-            sts.append({"name": f"Subtask {k + 1}", "score": score, "testcases": groups[k]})
+        use_sub = int(p.get("use_subtasks") if "use_subtasks" in p.keys() and p.get("use_subtasks") is not None else 1)
+        if use_sub:
+            sts = [{"name": "Subtask 1", "score": total, "testcases":
+                    [{"input": c["input"], "output": c["output"]} for c in cases]}]
+        else:
+            scores = even_split_scores(total, len(cases))
+            for c, sc in zip(cases, scores):
+                c["score"] = sc
+            sts = [{"name": "测试点", "score": 0, "per_case": True, "testcases": cases,
+                    "validator": p.get("hack_validator") or ""}]
         await db.execute("UPDATE problems SET subtasks=? WHERE id=?",
                          (json.dumps(sts, ensure_ascii=False), pid))
         await db.commit()
-        return {"ok": True, "subtasks": sts}
+        return {"ok": True, "subtasks": sts, "use_subtasks": use_sub}
     finally:
         await db.close()
 
@@ -2764,11 +2788,11 @@ def run_judge_sync(sid):
         row = con.execute(
             "SELECT s.code AS _code, p.id, p.slug, p.time_limit, p.memory_limit, p.subtasks, "
             "p.validator, p.interactive, p.score_total, p.checker_type, "
-            "p.file_io_in, p.file_io_out "
+            "p.file_io_in, p.file_io_out, p.use_subtasks "
             "FROM submissions s JOIN problems p ON p.id=s.problem_id WHERE s.id=?", (sid,)).fetchone()
         if not row: return
         keys = ("id","slug","time_limit","memory_limit","subtasks","validator","interactive",
-                "score_total","checker_type","file_io_in","file_io_out")
+                "score_total","checker_type","file_io_in","file_io_out","use_subtasks")
         p = {k: (row[k] if k in row.keys() else "") for k in keys}
         p["subtasks"] = json.loads(p["subtasks"] or "[]")
         code = row["_code"]
@@ -2812,10 +2836,21 @@ def _persist_hack_testcase(con, p_row, hid, hack_input, expected):
     (pdir / in_name).write_text(hack_input or "", encoding="utf-8", newline="\n")
     (pdir / out_name).write_text(expected or "", encoding="utf-8", newline="\n")
     sts = json.loads(p_row["subtasks"] or "[]")
-    if any(t.get("name") == f"Hack #{hid}" for t in sts):
+    if any((t.get("name") == f"Hack #{hid}") or
+           any((c.get("input") == in_name) for c in (t.get("testcases") or []))
+           for t in sts):
         return
-    sts.append({"name": f"Hack #{hid}", "score": 0,
-                "testcases": [{"input": in_name, "output": out_name}]})
+    use_sub = 1
+    try:
+        use_sub = int(p_row["use_subtasks"] if "use_subtasks" in p_row.keys() and p_row["use_subtasks"] is not None else 1)
+    except Exception:
+        use_sub = 1
+    extra = {"input": in_name, "output": out_name, "score": 0}
+    if not use_sub and sts:
+        sts[0].setdefault("testcases", []).append(extra)
+        sts[0]["per_case"] = True
+    else:
+        sts.append({"name": f"Hack #{hid}", "score": 0, "testcases": [extra]})
     con.execute("UPDATE problems SET subtasks=? WHERE id=?",
                 (json.dumps(sts, ensure_ascii=False), p_row["id"]))
     con.commit()
@@ -2869,7 +2904,9 @@ def run_hack_sync(hid):
         con.execute("UPDATE hacks SET status='JUDGING' WHERE id=?", (hid,)); con.commit()
 
         p_row = con.execute("SELECT * FROM problems WHERE id=?", (h["problem_id"],)).fetchone()
-        p = {k: p_row[k] for k in p_row.keys() if k in ("id","slug","time_limit","memory_limit","subtasks","validator","interactive","score_total","checker_type")}
+        want = ("id","slug","time_limit","memory_limit","subtasks","validator","interactive",
+                "score_total","checker_type","file_io_in","file_io_out","use_subtasks","hack_validator")
+        p = {k: p_row[k] for k in p_row.keys() if k in want}
         p["subtasks"] = json.loads(p["subtasks"] or "[]")
 
         # The attacker must be able to solve their own input: use their best

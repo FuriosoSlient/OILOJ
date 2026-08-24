@@ -107,7 +107,15 @@ def _pump(stream, sink, data=None):
             sink.append(b"")
 
 
-def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb):
+def safe_io_name(name):
+    n = os.path.basename((name or "").strip())
+    if not n or n in (".", "..") or "/" in n or "\\" in n:
+        return ""
+    return n
+
+
+def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb,
+                cwd=None, file_in=None, file_out=None):
     """Run a binary; returns (rc, stdout, stderr, status, elapsed_ms, max_rss_kb).
 
     I/O is pumped by helper threads and the child is reaped with os.wait4(), which
@@ -115,7 +123,20 @@ def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb):
     sticky high-water mark across all children and would misreport memory.)
     """
     tl = max(0.05, time_limit_ms / 1000.0)
-    payload = stdin_data.encode() if isinstance(stdin_data, str) else (stdin_data or b"")
+    work = Path(cwd) if cwd else None
+    fin = safe_io_name(file_in)
+    fout = safe_io_name(file_out)
+    if work and fin:
+        write_text(work / fin, stdin_data if isinstance(stdin_data, str) else
+                   (stdin_data or b"").decode("utf-8", errors="replace"))
+        payload = b""
+    else:
+        payload = stdin_data.encode() if isinstance(stdin_data, str) else (stdin_data or b"")
+    if work and fout:
+        try:
+            (work / fout).unlink()
+        except Exception:
+            pass
 
     try:
         proc = subprocess.Popen(
@@ -123,6 +144,7 @@ def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            cwd=str(work) if work else None,
             **_popen_kwargs(),
         )
     except Exception as e:
@@ -346,9 +368,11 @@ def judge_submission(problem, code, hack_input=None, progress=None):
         case_results = []
         total = 0
         overall = "AC"
+        use_sub = int(problem.get("use_subtasks") if problem.get("use_subtasks") is not None else 1)
         for si, st in enumerate(subtasks):
             st_score = st.get("score", 0)
             tcs = st.get("testcases", [])
+            per_case = (not use_sub) or bool(st.get("per_case"))
             got = 0
             all_ok = True
             for tc in tcs:
@@ -367,7 +391,9 @@ def judge_submission(problem, code, hack_input=None, progress=None):
                     status = "AC" if ok else "WA"
                     elapsed = 0
                 else:
-                    rc, out, err, status, elapsed, _ = run_process(str(binp), inp, tl, ml)
+                    rc, out, err, status, elapsed, _ = run_process(
+                        str(binp), inp, tl, ml, cwd=str(work),
+                        file_in=fio_in or None, file_out=fio_out or None)
                     if status == "AC":
                         if checker_bin:
                             okc, msgc = run_checker(str(checker_bin), inp, out, expected, pdir)
@@ -376,18 +402,29 @@ def judge_submission(problem, code, hack_input=None, progress=None):
                             status = "AC" if token_compare(out, expected) else "WA"
                         else:
                             status = "SE"
-                case_results.append({"subtask": si, "case": tc.get("input"), "status": status, "time": int(elapsed)})
-                if progress:
-                    try:
-                        progress(case_results, total)
-                    except Exception:
-                        pass
-                if status != "AC":
+                tc_max = int(tc.get("score") or 0)
+                earned = 0
+                if status == "AC":
+                    if per_case:
+                        earned = tc_max
+                        got += earned
+                else:
                     all_ok = False
                     if overall == "AC":
                         overall = "WA" if status == "WA" else status
-            if all_ok and tcs:
-                got = st_score
+                case_results.append({
+                    "subtask": si, "case": tc.get("input"), "status": status,
+                    "time": int(elapsed), "score": earned,
+                    "max_score": tc_max if per_case else int(st_score or 0),
+                })
+                if progress:
+                    try:
+                        progress(case_results, total + got)
+                    except Exception:
+                        pass
+            if not per_case:
+                if all_ok and tcs:
+                    got = st_score
             subtask_scores.append(got)
             total += got
         full = problem.get("score_total") or 0
@@ -622,6 +659,19 @@ def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
 
     try:
         # ---- stage 1: standard solution -------------------------------------
+        hv = (problem.get("hack_validator") or "").strip()
+        if not hv:
+            for st in (problem.get("subtasks") or []):
+                if (st.get("validator") or "").strip():
+                    hv = st["validator"]
+                    break
+        if hv:
+            okv, msgv = run_subtask_validator(hv, hack_input, pdir)
+            if not okv:
+                return {"verdict": "INVALID",
+                        "message": f"数据校验器拒绝该输入：{msgv}",
+                        "detail": detail}
+
         ref_bin = _prepare_reference(pdir, tl, ml)
         if not ref_bin:
             return {"verdict": "INVALID",
@@ -630,7 +680,10 @@ def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
         # The reference gets a generous time budget and no memory cap: it only has
         # to establish the correct answer, and it may legitimately use more memory
         # than a contestant's solution is allowed.
-        std = _run_one(ref_bin, hack_input, max(tl * 5, 10000), 0, "标准程序 (std)")
+        fio_in = safe_io_name(problem.get("file_io_in") or "")
+        fio_out = safe_io_name(problem.get("file_io_out") or "")
+        std = _run_one(ref_bin, hack_input, max(tl * 5, 10000), 0, "标准程序 (std)",
+                       cwd=str(work), file_in=fio_in or None, file_out=fio_out or None)
         detail["stages"].append(std)
         if std["status"] != "AC":
             return {"verdict": "INVALID",
@@ -659,7 +712,8 @@ def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
                 return {"verdict": "INVALID",
                         "message": f"攻击方代码编译失败，无法验证数据合法性: {clog[:300]}",
                         "detail": detail}
-            atk = _run_one(abin, hack_input, tl, ml, "攻击方程序")
+            atk = _run_one(abin, hack_input, tl, ml, "攻击方程序",
+                           cwd=str(work), file_in=fio_in or None, file_out=fio_out or None)
             if atk["status"] == "AC":
                 okc, msg = verify(atk["output"])
                 atk["checker"] = msg
@@ -685,7 +739,8 @@ def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
 
         failed_run = None
         for i in range(max(1, runs)):
-            r = _run_one(vbin, hack_input, tl, ml, f"被 Hack 程序 第 {i+1}/{runs} 次")
+            r = _run_one(vbin, hack_input, tl, ml, f"被 Hack 程序 第 {i+1}/{runs} 次",
+                         cwd=str(work), file_in=fio_in or None, file_out=fio_out or None)
             if r["status"] == "AC":
                 okc, msg = verify(r["output"])
                 r["checker"] = msg
@@ -715,4 +770,3 @@ def compile_cpp_source(code, out_bin, work, filename="tmp.cpp"):
     src = work / filename
     write_text(src, code)
     return compile_cpp(str(src), str(out_bin))
-
