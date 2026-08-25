@@ -450,6 +450,8 @@ async function saveProblem(quiet){
     tags:g('f_tags'), interactive:g('f_inter'),
     checker_type:g('f_checker'), spj_source:g('f_spj'), std_source:g('f_std'), author:g('f_author'),
     file_io_in:g('f_fio_in'), file_io_out:g('f_fio_out'),
+    use_subtasks: useSubOn() ? '1' : '0',
+    hack_validator: g('f_hack_val'),
     subtasks: JSON.stringify(editing.subtasks||[]),
   };
   const pos=g('f_pos'); if(pos!=='') payload.position=pos;
