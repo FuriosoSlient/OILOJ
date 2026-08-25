@@ -291,6 +291,51 @@ function renderAdminFab(user, active){
 // treat _x_ as emphasis), rendered with KaTeX, then re-inserted. The markdown
 // output is sanitised with DOMPurify since statements are admin-authored HTML.
 
+// Markdown tables: a cell whose only content is `^` merges with the cell above
+// (rowspan), matching the common OI statement convention.
+function mergeCaretTables(html){
+  if(!html || typeof DOMParser === 'undefined') return html;
+  let doc;
+  try{ doc = new DOMParser().parseFromString('<div id="__stmt">'+html+'</div>', 'text/html'); }
+  catch(e){ return html; }
+  const root = doc.getElementById('__stmt') || doc.body;
+  root.querySelectorAll('table').forEach(table=>{
+    const rows = [...table.querySelectorAll('tr')];
+    const occup = [];
+    for(let r=0;r<rows.length;r++){
+      if(!occup[r]) occup[r]=[];
+      const cells = [...rows[r].children].filter(el=>{
+        const t=el.tagName; return t==='TD'||t==='TH';
+      });
+      let c=0;
+      for(const td of cells){
+        while(occup[r][c]) c++;
+        const cs = Math.max(1, parseInt(td.getAttribute('colspan')||'1',10)||1);
+        const txt = (td.textContent||'').replace(/\u00a0/g,' ').trim();
+        if(txt==='^' && r>0){
+          let up=r-1, src=null;
+          while(up>=0){
+            src = occup[up] && occup[up][c];
+            if(src) break;
+            up--;
+          }
+          if(src){
+            const rs = (parseInt(src.getAttribute('rowspan')||'1',10)||1)+1;
+            src.setAttribute('rowspan', String(rs));
+            for(let k=0;k<cs;k++) occup[r][c+k]=src;
+            td.remove();
+            c += cs;
+            continue;
+          }
+        }
+        for(let k=0;k<cs;k++) occup[r][c+k]=td;
+        c += cs;
+      }
+    }
+  });
+  return root.innerHTML;
+}
+
 function renderStatement(text){
   if(!text) return '';
   if(typeof marked === 'undefined'){          // vendor scripts absent -> plain text
@@ -335,8 +380,9 @@ function renderStatement(text){
     }
   });
 
+  html = mergeCaretTables(html);
   if(typeof DOMPurify !== 'undefined'){
-    html = DOMPurify.sanitize(html, {ADD_TAGS:['math','semantics','annotation','mrow','mi','mo','mn','msup','msub','mfrac','msqrt','mspace','mtext','munderover','mover','munder','mtable','mtr','mtd','svg','path','line'], ADD_ATTR:['xmlns','encoding','display','mathvariant','stretchy','viewBox','d','style','aria-hidden']});
+    html = DOMPurify.sanitize(html, {ADD_TAGS:['math','semantics','annotation','mrow','mi','mo','mn','msup','msub','mfrac','msqrt','mspace','mtext','munderover','mover','munder','mtable','mtr','mtd','svg','path','line'], ADD_ATTR:['xmlns','encoding','display','mathvariant','stretchy','viewBox','d','style','aria-hidden','rowspan','colspan']});
   }
   // Syntax-highlight fenced C++ blocks produced by marked. Done after sanitising
   // so the highlighter's own markup survives.
