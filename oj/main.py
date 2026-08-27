@@ -2160,9 +2160,11 @@ int main(int argc, char* argv[]) {
 FUNC_HEADER_TEMPLATE = r"""#ifndef INTERACTION_H
 #define INTERACTION_H
 
+// 选手只实现 solve()，不要写 main。
 int get_n();
 int query(int x);
 void answer(int x);
+void solve();
 
 #endif
 """
@@ -2171,9 +2173,8 @@ FUNC_GRADER_TEMPLATE = r"""#include "interaction.h"
 #include <bits/stdc++.h>
 using namespace std;
 
-// 函数式交互 grader：不要写 main（main 在选手代码里）。
-// stdin 读入测试数据。合法结束 exit(0)；答案错误 exit(1)。
-// 若测试点有 .out，stdout 还会再和标准输出逐 token 比对。
+// 函数式交互 grader：main 在这里。stdin 由 grader 读入测试数据，
+// 再调用选手的 solve()。exit(0)=通过，exit(1)=WA。选手不要写 main。
 
 static int n, secret, qcnt, answered;
 
@@ -2193,16 +2194,13 @@ void answer(int x) {
     exit(1);
 }
 
-struct GraderInit {
-    GraderInit() {
-        ios::sync_with_stdio(false);
-        cin.tie(nullptr);
-        if (!(cin >> n >> secret)) exit(3);
-    }
-    ~GraderInit() {
-        if (!answered) exit(1);
-    }
-} _grader_init;
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+    if (!(cin >> n >> secret)) return 3;
+    solve();
+    return answered ? 0 : 1;
+}
 """
 
 

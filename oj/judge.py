@@ -307,7 +307,7 @@ def is_functional(problem) -> bool:
 
 
 def compile_functional(user_src, out_bin, pdir, work) -> tuple[bool, str]:
-    """Link contestant code with grader.cpp / interaction.h (函数式交互)."""
+    """Link contestant code with grader.cpp (grader provides main)."""
     pdir = Path(pdir)
     work = Path(work)
     header = pdir / "interaction.h"
@@ -325,6 +325,8 @@ def compile_functional(user_src, out_bin, pdir, work) -> tuple[bool, str]:
         except Exception:
             write_text(gdst, read_text(grader))
         extras.append(str(gdst))
+    else:
+        return False, "函数式交互缺少 grader.cpp（main 必须写在 grader 里，由 grader 读入数据）"
     return compile_cpp(str(user_src), str(out_bin), extra_flags=flags, extra_sources=extras)
 
 
@@ -875,7 +877,7 @@ def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
 
         # ---- stage 3: victim, executed `runs` times --------------------------
         vbin = work / ("victim" + EXE)
-        ok, clog = compile_cpp_source(victim_code, vbin, work, "victim.cpp")
+        ok, clog = compile_cpp_source(victim_code, vbin, work, "victim.cpp", problem, pdir)
         if not ok:
             detail["stages"].append({"label": "被 Hack 程序", "status": "CE",
                                      "time_ms": 0, "memory_kb": 0,

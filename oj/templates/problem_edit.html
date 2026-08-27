@@ -128,10 +128,10 @@ async function editProblem(pid){
         <div id="func-box" style="display:none">
           <h3 style="margin:16px 0 8px;font-size:14px;">函数式交互</h3>
           <div class="form-hint" style="margin-bottom:8px">
-            选手 <code>#include "interaction.h"</code> 并编写 <code>main</code>。
             评测把选手代码与 <code>grader.cpp</code> 链在一起编译。
-            <strong>grader 不要写 main</strong>（与选手抢入口）。
-            测试数据走 stdin；grader 用 <code>exit(0)</code> 表示通过、<code>exit(1)</code> 表示 WA。
+            <strong>main 写在 grader 里</strong>：grader 从 stdin 读测试数据，再调用选手实现的函数（如 <code>solve()</code>）。
+            选手 <code>#include "interaction.h"</code>，<strong>不要写 main</strong>。
+            grader 用 <code>exit(0)</code> / 返回 0 表示通过、<code>exit(1)</code> 表示 WA。
             若测试点有 .out，还会比对 stdout。
           </div>
           <div class="flex gap8" style="margin-bottom:8px">

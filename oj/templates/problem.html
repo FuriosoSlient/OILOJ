@@ -76,6 +76,18 @@ int main(){
 `};
 
 function loadSample(){
+  if(problem && problem.functional){
+    document.getElementById('code').value=
+`#include "interaction.h"
+
+void solve(){
+    int n = get_n();
+    // 通过 query / answer 交互，不要读 stdin，不要写 main
+    answer(n);
+}
+`;
+    return;
+  }
   document.getElementById('code').value=SAMPLE_CODE.default;
 }
 
@@ -231,7 +243,8 @@ async function loadSubs(){
     </div>
     ${problem.functional?`<div class="file-io-banner">
       <strong>函数式交互</strong>
-      <span>请 <code>#include "interaction.h"</code>，通过接口函数与评测交互，不要自己解析标准输入。</span>
+      <span>请 <code>#include "interaction.h"</code> 实现接口函数（如 <code>solve()</code>）。
+        <strong>不要写 main</strong>，输入由 grader 读取。</span>
       ${problem.interact_header?`<details style="margin-top:8px"><summary style="cursor:pointer">查看 interaction.h</summary>
         <pre class="code-body" style="margin-top:8px;white-space:pre-wrap">${esc(problem.interact_header)}</pre></details>`:''}
     </div>`:''}
@@ -255,6 +268,9 @@ async function loadSubs(){
           <span class="muted">${a.size}B</span></li>`).join('')}</ul>`:''}
       ${hackSec}
     </div>`;
+  if(problem.functional){
+    document.getElementById('code').placeholder='// 不要写 main。#include "interaction.h" 并实现 solve() ...';
+  }
   loadSubs();
 })();
 </script>
