@@ -114,8 +114,55 @@ def safe_io_name(name):
     return n
 
 
+def _stage_input(work, stdin_data, stdin_path, file_in):
+    """Place input in the sandbox without keeping a second Python copy.
+
+    Returns (stdin_handle_or_None, payload_bytes_or_None, named_in_path).
+    Prefer opening the original testdata file (or a copy/hardlink) so the judge
+    process does not hold the whole case in RAM while the child also reads it —
+    that double-counting is what produced false MLEs.
+    """
+    fin = safe_io_name(file_in)
+    named = (work / fin) if (work and fin) else None
+    src = Path(stdin_path) if stdin_path else None
+    if src and src.is_file():
+        if named:
+            try:
+                if named.exists() or named.is_symlink():
+                    named.unlink()
+            except Exception:
+                pass
+            try:
+                os.link(src, named)
+            except Exception:
+                try:
+                    shutil.copyfile(src, named)
+                except Exception:
+                    write_text(named, read_text(src))
+            return open(named, "rb"), None, named
+        return open(src, "rb"), None, None
+    text = stdin_data if isinstance(stdin_data, str) else (
+        (stdin_data or b"").decode("utf-8", errors="replace"))
+    if named:
+        write_text(named, text)
+        return open(named, "rb"), None, named
+    payload = text.encode("utf-8") if text else b""
+    return None, payload, None
+
+
+def _read_vmhwm_kb(pid):
+    try:
+        with open(f"/proc/{pid}/status", "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1])
+    except Exception:
+        return 0
+    return 0
+
+
 def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb,
-                cwd=None, file_in=None, file_out=None):
+                cwd=None, file_in=None, file_out=None, stdin_path=None):
     """Run a binary; returns (rc, stdout, stderr, status, elapsed_ms, max_rss_kb).
 
     I/O is pumped by helper threads and the child is reaped with os.wait4(), which
@@ -124,55 +171,70 @@ def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb,
     """
     tl = max(0.05, time_limit_ms / 1000.0)
     work = Path(cwd) if cwd else None
-    fin = safe_io_name(file_in)
     fout = safe_io_name(file_out)
-    if work and fin:
-        write_text(work / fin, stdin_data if isinstance(stdin_data, str) else
-                   (stdin_data or b"").decode("utf-8", errors="replace"))
-        payload = b""
-    else:
-        payload = stdin_data.encode() if isinstance(stdin_data, str) else (stdin_data or b"")
+    stdin_f = None
+    stdin_f, payload, _named = _stage_input(work, stdin_data, stdin_path, file_in)
     if work and fout:
         try:
             (work / fout).unlink()
         except Exception:
             pass
 
+    popen_kw = dict(
+        args=[bin_path],
+        stdin=stdin_f if stdin_f is not None else subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=str(work) if work else None,
+        **_popen_kwargs(),
+    )
+
     try:
-        proc = subprocess.Popen(
-            [bin_path],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=str(work) if work else None,
-            **_popen_kwargs(),
-        )
+        proc = subprocess.Popen(**popen_kw)
     except Exception as e:
+        try:
+            if stdin_f:
+                stdin_f.close()
+        except Exception:
+            pass
         return -1, "", str(e), "RE", 0, 0
+    redirected_in = stdin_f is not None
+    try:
+        if stdin_f:
+            stdin_f.close()
+    except Exception:
+        pass
+    stdin_f = None
 
     out_buf, err_buf = [], []
-    threads = [
-        threading.Thread(target=_pump, args=(proc.stdin, None, payload), daemon=True),
-        threading.Thread(target=_pump, args=(proc.stdout, out_buf), daemon=True),
-        threading.Thread(target=_pump, args=(proc.stderr, err_buf), daemon=True),
-    ]
+    threads = []
+    if not redirected_in:
+        threads.append(threading.Thread(target=_pump, args=(proc.stdin, None, payload or b""), daemon=True))
+    threads.append(threading.Thread(target=_pump, args=(proc.stdout, out_buf), daemon=True))
+    threads.append(threading.Thread(target=_pump, args=(proc.stderr, err_buf), daemon=True))
     t0 = time.time()
     for t in threads:
         t.start()
 
-    rc, max_rss_kb, timed_out = None, 0, False
+    rc, max_rss_kb, timed_out, term_sig = None, 0, False, 0
     if _HAS_RESOURCE and not IS_WIN:
-        # Poll wait4(WNOHANG) so we can enforce the time limit ourselves.
         while True:
+            hwm = _read_vmhwm_kb(proc.pid)
+            if hwm > max_rss_kb:
+                max_rss_kb = hwm
             try:
                 pid, sts, ru = os.wait4(proc.pid, os.WNOHANG)
             except (ChildProcessError, OSError):
                 pid, sts, ru = proc.pid, 0, None
             if pid:
                 if ru is not None:
-                    max_rss_kb = int(ru.ru_maxrss)
-                rc = -os.WTERMSIG(sts) if os.WIFSIGNALED(sts) else os.WEXITSTATUS(sts)
-                proc.returncode = rc          # keep Popen from re-reaping
+                    max_rss_kb = max(max_rss_kb, int(ru.ru_maxrss))
+                if os.WIFSIGNALED(sts):
+                    term_sig = os.WTERMSIG(sts)
+                    rc = -term_sig
+                else:
+                    rc = os.WEXITSTATUS(sts)
+                proc.returncode = rc
                 break
             if time.time() - t0 > tl:
                 timed_out = True
@@ -180,7 +242,9 @@ def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb,
                 try:
                     _p, sts, ru = os.wait4(proc.pid, 0)
                     if ru is not None:
-                        max_rss_kb = int(ru.ru_maxrss)
+                        max_rss_kb = max(max_rss_kb, int(ru.ru_maxrss))
+                    if os.WIFSIGNALED(sts):
+                        term_sig = os.WTERMSIG(sts)
                     proc.returncode = -9
                 except (ChildProcessError, OSError):
                     proc.returncode = -9
@@ -208,17 +272,26 @@ def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb,
         if fp.exists():
             stdout = read_text(fp)
 
-    if sys.platform == "darwin":       # macOS reports bytes, Linux kilobytes
+    if sys.platform == "darwin":
         max_rss_kb //= 1024
 
+    try:
+        ml_kb = int(memory_limit_mb or 0) * 1024
+    except (TypeError, ValueError):
+        ml_kb = 0
+
     if timed_out:
+        if ml_kb and max_rss_kb > ml_kb:
+            return -1, stdout, stderr, "MLE", elapsed, max_rss_kb
         return -1, stdout, stderr, "TLE", tl * 1000, max_rss_kb
+
+    over_mem = bool(ml_kb and max_rss_kb > ml_kb)
+    if over_mem:
+        return (rc if rc is not None else -1), stdout, stderr, "MLE", elapsed, max_rss_kb
 
     status = "AC"
     if rc is None or rc != 0:
         status = "RE"
-    if memory_limit_mb and max_rss_kb > memory_limit_mb * 1024:
-        status = "MLE"
 
     return (rc if rc is not None else -1), stdout, stderr, status, elapsed, max_rss_kb
 
@@ -384,18 +457,20 @@ def judge_submission(problem, code, hack_input=None, progress=None):
                                          "message": f"missing {tc['input']}"})
                     all_ok = False
                     continue
-                inp = read_text(infile)
                 expected = read_text(outfile) if outfile and outfile.exists() else None
                 if interactive and interactor_bin:
+                    inp = read_text(infile)
                     ok, msg = run_interactive(str(binp), interactor_bin, inp, tl, pdir)
                     status = "AC" if ok else "WA"
                     elapsed = 0
                 else:
                     rc, out, err, status, elapsed, _ = run_process(
-                        str(binp), inp, tl, ml, cwd=str(work),
-                        file_in=fio_in or None, file_out=fio_out or None)
+                        str(binp), None, tl, ml, cwd=str(work),
+                        file_in=fio_in or None, file_out=fio_out or None,
+                        stdin_path=str(infile))
                     if status == "AC":
                         if checker_bin:
+                            inp = read_text(infile)
                             okc, msgc = run_checker(str(checker_bin), inp, out, expected, pdir)
                             status = "AC" if okc else "WA"
                         elif expected is not None:
