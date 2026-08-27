@@ -321,6 +321,7 @@ async def problem_visibility(db, problem, viewer, contest_id=None):
 
     # Explicit contest context -> OIL isolation rules.
     if contest_id:
+        viewer = await apply_contest_roster(db, viewer, contest_id)
         link = next((l for l in links if l["id"] == contest_id), None)
         if link:
             phase = contest_phase(link)
@@ -560,7 +561,7 @@ async def compute_oil_state(db, contest, viewer=None):
         cur = await db.execute(
             "SELECT tm.*, u.display_name as uname, t.name as team_name, t.color as team_color "
             "FROM team_messages tm JOIN users u ON u.id=tm.user_id "
-            "LEFT JOIN teams t ON t.id=tm.team_id WHERE tm.contest_id=? ORDER BY tm.id", (cid,))
+            "LEFT JOIN contest_teams t ON t.id=tm.team_id WHERE tm.contest_id=? ORDER BY tm.id", (cid,))
         rows = [dict(r) for r in await cur.fetchall()]
         by_team = {}
         for r in rows:
@@ -875,8 +876,8 @@ async def api_me(user=Depends(current_user)):
     finally:
         await db.close()
     return {"user": {"id": user["id"], "username": user["username"],
-                     "display_name": user["display_name"], "team_id": user["team_id"],
-                     "position": user["position"], "is_admin": bool(user["is_admin"]),
+                     "display_name": user["display_name"], "team_id": None,
+                     "position": None, "is_admin": bool(user["is_admin"]),
                      "is_manager": bool(managed), "managed_contests": managed,
                      "is_author": bool(authored), "authored_count": authored,
                      "rating": int(user["rating"] if "rating" in user.keys() and user["rating"] is not None else 1500)}}
@@ -1051,9 +1052,11 @@ async def submission_access(db, sub, viewer):
     if phase == "solve":
         if not viewer:
             return True, False                     # anonymous spectator
-        owner = await db.execute("SELECT team_id FROM users WHERE id=?", (sub["user_id"],))
+        owner = await db.execute(
+            "SELECT team_id FROM contest_members WHERE contest_id=? AND user_id=?",
+            (cid, sub["user_id"]))
         orow = await owner.fetchone()
-        same_team = orow and viewer["team_id"] and orow["team_id"] == viewer["team_id"]
+        same_team = orow and viewer.get("team_id") and orow["team_id"] == viewer["team_id"]
         if same_team:
             # Teammate rows unlock only when both sides have locked their problem.
             both_locked = (await is_locked(db, cid, viewer["id"])
@@ -1509,6 +1512,9 @@ async def apply_contest_roster(db, user, cid):
         if r:
             u["team_id"] = r["team_id"]
             u["position"] = r["position"]
+        else:
+            u["team_id"] = None
+            u["position"] = None
     except Exception:
         pass
     return u
@@ -1993,6 +1999,9 @@ async def api_message(cid: int, message: str = Form(...), user=Depends(current_u
         locked = await is_locked(db, cid, user["id"])
         if not (locked and phase in ("solve","hack")):
             raise HTTPException(403, "当前不能发言")
+        user = await apply_contest_roster(db, user, cid)
+        if not user.get("team_id"):
+            raise HTTPException(403, "你尚未被分到本场队伍")
         await db.execute(
             "INSERT INTO team_messages(contest_id,team_id,user_id,message,created_at) VALUES(?,?,?,?,?)",
             (cid, user["team_id"], user["id"], message.strip(), time.time()))
@@ -2288,11 +2297,9 @@ async def admin_overview(user=Depends(current_user)):
         users, teams = [], []
         if role == "admin":
             cur = await db.execute(
-                "SELECT u.id,u.username,u.display_name,u.team_id,u.position,u.is_admin,t.name AS team_name "
-                "FROM users u LEFT JOIN teams t ON t.id=u.team_id ORDER BY u.id")
+                "SELECT u.id,u.username,u.display_name,u.is_admin FROM users u ORDER BY u.id")
             users = [dict(r) for r in await cur.fetchall()]
-            cur = await db.execute("SELECT * FROM teams ORDER BY id")
-            teams = [dict(r) for r in await cur.fetchall()]
+            teams = []
 
         return {"problems": problems, "contests": contests, "users": users,
                 "teams": teams, "difficulties": DIFFICULTIES,
@@ -2836,25 +2843,14 @@ async def admin_save_user(
     display_name: Optional[str] = Form(None),
     user=Depends(current_user),
 ):
-    """Assign a user to a team/position or toggle their admin flag."""
+    """Toggle admin flag / display name. OIL 分队只写 contest_members。"""
     require_admin(user)
-    tid = int(team_id) if team_id not in (None, "", "null") else None
-    pos = int(position) if position not in (None, "", "null") else None
-    if pos is not None and not (0 <= pos <= 4):
-        raise HTTPException(400, "位置必须是 0..4")
     db = await get_db()
     try:
-        if tid is not None and pos is not None:
-            cur = await db.execute(
-                "SELECT id,display_name FROM users WHERE team_id=? AND position=? AND id<>?",
-                (tid, pos, id))
-            dup = await cur.fetchone()
-            if dup:
-                raise HTTPException(400, f"位置 {pos + 1} 已被 {dup['display_name']} 占用")
         if display_name:
             await db.execute("UPDATE users SET display_name=? WHERE id=?", (display_name, id))
-        await db.execute("UPDATE users SET team_id=?, position=?, is_admin=? WHERE id=?",
-                         (tid, pos, 1 if is_admin_flag else 0, id))
+        await db.execute("UPDATE users SET is_admin=? WHERE id=?",
+                         (1 if is_admin_flag else 0, id))
         await db.commit()
         return {"ok": True}
     finally:
