@@ -1491,7 +1491,9 @@ async def contest_roster(db, cid):
     """Per-contest members only. Do NOT fall back to the global 3-team assignment."""
     try:
         cur = await db.execute(
-            "SELECT u.*, cm.position AS position, cm.team_id AS team_id, "
+            "SELECT u.id AS id, u.username AS username, u.display_name AS display_name, "
+            "u.is_admin AS is_admin, u.rating AS rating, "
+            "cm.user_id AS user_id, cm.position AS position, cm.team_id AS team_id, "
             "t.name AS team_name, t.color AS team_color "
             "FROM contest_members cm "
             "JOIN users u ON u.id=cm.user_id "
