@@ -394,7 +394,7 @@ async def compute_oil_state(db, contest, viewer=None):
     if viewer:
         viewer = await apply_contest_roster(db, viewer, cid)
 
-    members = await contest_roster(db, cid)
+    members = [m for m in await contest_roster(db, cid) if m.get("team_id") is not None]
 
     # locks
     cur = await db.execute("SELECT user_id, locked_at FROM personal_locks WHERE contest_id=?", (cid,))
@@ -664,6 +664,9 @@ async def compute_oil_state(db, contest, viewer=None):
             {"slot": slot, "id": p["id"],
              "title": ("" if phase == "before" else p["title"]),
              "type": p["problem_type"],
+             "kind": ("personal" if str(slot).startswith("personal:")
+                      else ("mystery" if slot == "mystery"
+                            else ("team" if str(slot).startswith("team:") else "other"))),
              "score_total": p["score_total"]}
             for slot, p in sorted(problems.items())
         ],

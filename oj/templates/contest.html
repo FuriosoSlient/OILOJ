@@ -125,9 +125,12 @@ function connectSSE(){
 function applyMeRoster(){
   if(!me || !state || !state.members) return;
   const m = state.members.find(x=>x.id===me.id);
-  if(m){
+  if(m && m.team_id!=null){
     me.team_id = m.team_id;
     me.position = m.position;
+  }else{
+    me.team_id = null;
+    me.position = null;
   }
 }
 
@@ -215,43 +218,69 @@ function render(force){
 
 function membersByTeam(){
   const teams={};
-  state.members.forEach(m=>{ (teams[m.team_id]=teams[m.team_id]||[]).push(m); });
+  (state.members||[]).forEach(m=>{
+    if(m.team_id==null) return;
+    (teams[m.team_id]=teams[m.team_id]||[]).push(m);
+  });
   return teams;
 }
 
-function teamName(tid){ const m=state.members.find(x=>x.team_id===tid); return m?m.team_name:`Team ${tid}`; }
-function teamColor(tid){ const m=state.members.find(x=>x.team_id===tid); return m?m.team_color:'#888'; }
+function teamName(tid){
+  const m=(state.members||[]).find(x=>x.team_id==tid);
+  if(m && m.team_name) return m.team_name;
+  return '队伍';
+}
+function teamColor(tid){
+  const m=(state.members||[]).find(x=>x.team_id==tid);
+  return (m && m.team_color) ? m.team_color : '#888';
+}
+function teamProblemRows(s){
+  const rows=[], seen=new Set();
+  (s.all_problems_summary||[]).forEach(p=>{
+    const slot=p.slot||'';
+    const kind=p.kind || (slot.startsWith('team:')?'team':(slot==='mystery'?'mystery':(slot.startsWith('personal:')?'personal':'other')));
+    if(kind!=='team' && kind!=='mystery') return;
+    if(seen.has(p.id)) return;
+    seen.add(p.id);
+    rows.push(p);
+  });
+  return rows;
+}
 
 function renderBoard(s){
   const teams=membersByTeam();
-  const tids=Object.keys(teams);
+  const tids=Object.keys(teams).map(Number).sort((a,b)=>a-b);
+  const tprobs=teamProblemRows(s);
   let html=`<div class="scoreboard-grid">`;
+  if(!tids.length){
+    html+=`<div class="alert alert-warn">本场尚未完成随机分队（需要恰好 10 人分成红/蓝两队）。</div>`;
+  }
   tids.forEach(tid=>{
     const members=teams[tid];
-    const total=s.team_totals[tid]||0;
+    const total=s.team_totals[tid]||s.team_totals[String(tid)]||0;
     html+=`<div class="team-panel">
       <div class="team-header" style="background:${teamColor(tid)}">
         <span>${esc(teamName(tid))}</span>
         <span class="team-total">${total}</span>
       </div>`;
-    members.sort((a,b)=>a.position-b.position).forEach(m=>{
+    members.sort((a,b)=>(a.position||0)-(b.position||0)).forEach(m=>{
       const ps=s.personal_scores[String(m.id)]||{total:0};
-      const hacked = m.attacker_gain>0;
       html+=`<div class="team-member ${m.locked?'locked':''}">
-        <span class="pos-tag">${m.position+1}</span>
+        <span class="pos-tag">${m.position==null?'—':(m.position+1)}</span>
         <span class="lock-icon">${m.locked?'🔒':'🔓'}</span>
         <span class="member-name">${esc(m.display_name)}</span>
         ${m.attacker_gain>0?`<span class="badge badge-SUCCESS">+${m.attacker_gain} 窃取</span>`:''}
         <span class="member-score">${ps.total}</span>
       </div>`;
     });
-    // team problem scores
     html+=`<div style="padding:10px 18px;background:#fafbfc;border-top:1px solid #f0f0f0;">
       <div style="font-size:12px;color:#888;margin-bottom:6px;">团队题得分</div>`;
-    state.all_problems_summary.filter(p=>p.type!=='personal').forEach(p=>{
-      const sc=s.team_problem_score[`${tid}:${p.id}`]||0;
+    if(!tprobs.length) html+=`<div class="muted" style="font-size:12px">未配置团队题</div>`;
+    tprobs.forEach(p=>{
+      const sc=s.team_problem_score[`${tid}:${p.id}`]||s.team_problem_score[tid+':'+p.id]||0;
+      const lab = (p.kind==='mystery' || p.slot==='mystery' || p.type==='mystery')?'神秘':'思维';
       html+=`<div class="flex-between" style="font-size:13px;padding:3px 0;">
-        <span>${esc(p.title||'???')} <span style="color:#aaa;">(${p.type==='mystery'?'神秘':'思维'})</span></span>
+        <span>${esc(p.title||'???')} <span style="color:#aaa;">(${lab})</span></span>
         <strong class="${sc===p.score_total?'subtask-ok':(sc>0?'subtask-hacked':'muted')}">${sc}/${p.score_total}</strong></div>`;
     });
     html+=`</div></div>`;
@@ -539,7 +568,7 @@ async function doTeamHack(problemId){
   if(!(document.getElementById(taId).value||'').trim() && !HACK_FILES[taId]){toast('请输入或上传测试数据','error');return;}
   // target = any member of opposing team
   const myTid=me.team_id;
-  const opp=state.members.find(m=>m.team_id!==myTid);
+  const opp=state.members.find(m=>m.team_id!=null && m.team_id!==myTid);
   if(!opp){toast('未找到对方队伍','error');return;}
   const res=document.getElementById(`thack-res-${problemId}`);
   res.innerHTML='<div class="alert alert-info"><span class="live-dot"></span>已提交，需击破对方所有正确做法，正在判定 ...</div>';
