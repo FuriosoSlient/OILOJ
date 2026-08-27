@@ -25,10 +25,11 @@
 <script>
 let me=null, DATA=null, tab='problems', editing=null, ROLE='admin';
 
-const OIL_PERSONAL = [
-  {key:'personal:0', label:'个人题 P1（位置 1）'},
-  {key:'personal:1', label:'个人题 P2（位置 2）'},
-];
+const OIL_PERSONAL = [];
+for(let pos=0; pos<5; pos++){
+  OIL_PERSONAL.push({key:`personal:${pos}:0`, label:`位置 ${pos+1} · 个人题 A`});
+  OIL_PERSONAL.push({key:`personal:${pos}:1`, label:`位置 ${pos+1} · 个人题 B`});
+}
 
 async function reload(){
   DATA = await API.get('/api/admin/overview');
@@ -221,10 +222,10 @@ function editContest(cid){
         <div id="oil-slots">
         <h3 style="margin:16px 0 8px;font-size:14px;">题目配置（OIL）</h3>
         <div class="form-hint" style="margin-bottom:8px">
-          个人题固定 2 道，对应队员位置 1、2，满分在各题编辑页设置。团队题数量不限，可随时增减。
+          每个位置（队员）各有 <strong>2 道个人题</strong> A / B，分数为该题满分（在题目编辑里设置）。团队题数量不限。
           比赛开始前题目对选手不可见；赛时按 OIL 规则可见并隐藏难度；结束后公开。
         </div>
-        <h4 style="margin:10px 0 6px;font-size:13px;color:#5a6d80">个人题（2 道）</h4>
+        <h4 style="margin:10px 0 6px;font-size:13px;color:#5a6d80">个人题（每位置 2 道）</h4>
         ${OIL_PERSONAL.map(s=>`
           <div class="form-row" style="margin-bottom:6px">
             <div class="form-group" style="flex:0 0 220px;justify-content:center">
@@ -248,7 +249,7 @@ function editContest(cid){
         ${ROLE==='admin' && cid ? `
         <div id="oil-roster-wrap">
         <h3 style="margin:16px 0 8px;font-size:14px;">本场参赛名单 / 随机分队</h3>
-        <div class="form-hint">OIL 默认 10 人随机分成红/蓝两队各 5 人。个人题只有 2 道，对应位置 1、2 的队员；其余位置只打团队题。每场独立分队。</div>
+        <div class="form-hint">OIL 默认 10 人随机分成红/蓝两队各 5 人，位置 1–5 各做自己的两道个人题。每场独立分队。</div>
         <div class="form-row"><div class="form-group">
           <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">
             ${DATA.users.map(u=>`

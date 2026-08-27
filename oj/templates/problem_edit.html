@@ -70,9 +70,9 @@ async function editProblem(pid){
             <input type="number" id="f_tl" value="${p.time_limit}"></div>
           <div class="form-group"><label>内存 (MB)</label>
             <input type="number" id="f_ml" value="${p.memory_limit}"></div>
-          <div class="form-group"><label>个人题位置 (0=P1, 1=P2)</label>
-            <input type="number" id="f_pos" value="${p.position??''}" min="0" max="1">
-            <span class="form-hint">OIL 现为 2 道个人题，分数用本题满分</span></div>
+          <div class="form-group"><label>个人题位置 (0-4)</label>
+            <input type="number" id="f_pos" value="${p.position??''}" min="0" max="4">
+            <span class="form-hint">OIL 每位队员 2 道个人题，分数用本题满分</span></div>
         </div>
         <div class="form-row">
           <div class="form-group"><label>标签（逗号分隔）</label>

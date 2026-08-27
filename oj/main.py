@@ -104,6 +104,37 @@ async def fetch_contest(db, cid):
         d["problems"][pd["slot"]] = pd
     return d
 
+def parse_personal_slot(slot):
+    """Return (position, which) for slots like personal:3 or personal:3:1."""
+    if not slot or not str(slot).startswith("personal:"):
+        return None
+    parts = str(slot).split(":")
+    try:
+        pos = int(parts[1])
+    except Exception:
+        return None
+    which = 0
+    if len(parts) >= 3:
+        try:
+            which = int(parts[2])
+        except Exception:
+            which = 0
+    return pos, which
+
+
+def personal_problems_for(problems, position):
+    """The (up to) two personal problems assigned to a seat, preserving order."""
+    if position is None:
+        return []
+    out, seen = [], set()
+    for key in (f"personal:{position}:0", f"personal:{position}:1", f"personal:{position}"):
+        p = problems.get(key)
+        if p and p["id"] not in seen:
+            seen.add(p["id"])
+            out.append((key, p))
+    return out
+
+
 def contest_phase(contest, now=None):
     now = now if now is not None else time.time()
     start = contest["start_time"]
@@ -307,7 +338,8 @@ async def problem_visibility(db, problem, viewer, contest_id=None):
                         "reason": "比赛尚未开始", "context": "contest"}
             locked = bool(viewer and await is_locked(db, contest_id, viewer["id"]))
             if slot and slot.startswith("personal:"):
-                pos = int(slot.split(":")[1])
+                parsed = parse_personal_slot(slot)
+                pos = parsed[0] if parsed else -1
                 own = bool(viewer and viewer["position"] == pos)
                 ok = own or locked
                 return {"visible": ok, "reveal_difficulty": False, "reveal_hack_data": False,
@@ -406,14 +438,15 @@ async def compute_oil_state(db, contest, viewer=None):
     visible_problems = []
     for slot, p in sorted(problems.items()):
         if slot.startswith("personal:"):
-            pos = int(slot.split(":")[1])
+            parsed = parse_personal_slot(slot) or (-1, 0)
+            pos, which = parsed
             is_own = viewer and viewer_pos == pos
             can_see = bool(not hide_names and (is_own or (viewer_locked and phase in ("solve","hack"))))
             # 做题阶段 / 公开 Hack：未锁题可提交自己的个人题；已锁题不能再交
             can_submit = bool(is_own and not viewer_locked and phase in ("solve", "hack"))
             visible_problems.append({
                 "slot": slot, "id": p["id"], "title": pub_title(p), "type": p["problem_type"],
-                "score_total": p["score_total"], "position": pos,
+                "score_total": p["score_total"], "position": pos, "which": which,
                 "visible": can_see, "can_submit": can_submit, "is_own": bool(is_own),
                 "subtasks": p["subtasks"],
             })
@@ -438,20 +471,31 @@ async def compute_oil_state(db, contest, viewer=None):
     personal_scores = {}
     for m in members:
         uid = m["id"]
-        slot = f"personal:{m['position']}"
-        p = problems.get(slot)
-        if not p: continue
-        s = best.get((uid, p["id"]))
-        raw = [0]*len(p["subtasks"])
-        if s and s["subtask_scores"]:
-            raw = list(json.loads(s["subtask_scores"]))
-        eff = []
-        for i, st in enumerate(p["subtasks"]):
-            got = raw[i] if i < len(raw) else 0
-            if got and (uid, p["id"], i) in hacked_personal:
-                got = int(got * 0.4)
-            eff.append(got)
-        personal_scores[uid] = {"raw": raw, "eff": eff, "total": sum(eff), "submitted": s is not None}
+        by_pid = {}
+        total = 0
+        submitted = False
+        first_raw, first_eff = [], []
+        for _slot, p in personal_problems_for(problems, m["position"]):
+            s = best.get((uid, p["id"]))
+            raw = [0]*len(p["subtasks"])
+            if s and s["subtask_scores"]:
+                raw = list(json.loads(s["subtask_scores"]))
+            eff = []
+            for i, st in enumerate(p["subtasks"]):
+                got = raw[i] if i < len(raw) else 0
+                if got and (uid, p["id"], i) in hacked_personal:
+                    got = int(got * 0.4)
+                eff.append(got)
+            total += sum(eff)
+            if s:
+                submitted = True
+            by_pid[str(p["id"])] = {"raw": raw, "eff": eff, "score_total": p["score_total"]}
+            if not first_raw:
+                first_raw, first_eff = raw, eff
+        personal_scores[uid] = {
+            "raw": first_raw, "eff": first_eff, "total": total,
+            "submitted": submitted, "by_pid": by_pid,
+        }
 
     # team scores: per team, per team problem; team score = 50 if any member AC; if hacked, 30% kept, attacker gains 70%
     team_problem_score = {}   # (team, pid) -> score
@@ -543,23 +587,22 @@ async def compute_oil_state(db, contest, viewer=None):
         mypos = viewer_pos
         for m in members:
             if m["team_id"] != viewer_team and m["position"] == mypos:
-                slot = f"personal:{mypos}"
-                p = problems.get(slot)
-                s = best.get((m["id"], p["id"])) if p else None
-                scored = []
-                if s and int(s.get("locked_submit") or 0) != 1:
-                    s = None
-                if s and s["subtask_scores"]:
-                    raw = json.loads(s["subtask_scores"])
-                    for i, st in enumerate(p["subtasks"]):
-                        if i < len(raw) and raw[i] > 0:
-                            already = (m["id"], p["id"], i) in hacked_personal
-                            scored.append({"index": i, "name": st["name"], "score": raw[i], "hacked": already})
-                hack_targets.append({
-                    "user_id": m["id"], "display_name": m["display_name"],
-                    "problem_id": p["id"], "problem_title": p["title"],
-                    "scored_subtasks": scored,
-                })
+                for _slot, p in personal_problems_for(problems, mypos):
+                    s = best.get((m["id"], p["id"]))
+                    scored = []
+                    if s and int(s.get("locked_submit") or 0) != 1:
+                        s = None
+                    if s and s["subtask_scores"]:
+                        raw = json.loads(s["subtask_scores"])
+                        for i, st in enumerate(p["subtasks"]):
+                            if i < len(raw) and raw[i] > 0:
+                                already = (m["id"], p["id"], i) in hacked_personal
+                                scored.append({"index": i, "name": st["name"], "score": raw[i], "hacked": already})
+                    hack_targets.append({
+                        "user_id": m["id"], "display_name": m["display_name"],
+                        "problem_id": p["id"], "problem_title": p["title"],
+                        "scored_subtasks": scored,
+                    })
     # team hack: phase hack, target is the other team (any problem they solved that is a thinking problem)
     team_hack_targets = []
     if viewer and viewer_team and phase == "hack":
