@@ -40,7 +40,7 @@ async function editProblem(pid){
            constraints:'',time_limit:1000,memory_limit:256,problem_type:'standard',score_total:100,
            difficulty:'',is_public:0,tags:'',position:null,interactive:0,subtasks:[],
            checker_type:'token',spj_source:'',spj_compiled:0,spj_log:'',author:'',std_source:'',
-           file_io_in:'',file_io_out:'',use_subtasks:1,hack_validator:'',attachments:[]};
+           file_io_in:'',file_io_out:'',use_subtasks:1,hack_validator:'',grader_source:'',interact_header:'',attachments:[]};
   if(pid){ const r = await API.get(`/api/admin/problem/${pid}`); p = r.problem; }
   editing = p;
   const diffOpts = ['',...DIFFICULTIES].map(d=>
@@ -95,8 +95,9 @@ async function editProblem(pid){
             </select></div>
           <div class="form-group" style="flex:0 0 auto"><label>评测方式</label>
             <select id="f_checker" onchange="toggleSpj()">
-              <option value="token" ${p.checker_type!=='spj'?'selected':''}>逐 token 比对（默认）</option>
+              <option value="token" ${p.checker_type!=='spj'&&p.checker_type!=='functional'?'selected':''}>逐 token 比对（默认）</option>
               <option value="spj" ${p.checker_type==='spj'?'selected':''}>SPJ 特殊评测（testlib）</option>
+              <option value="functional" ${p.checker_type==='functional'?'selected':''}>函数式交互</option>
             </select></div>
         </div>
 
@@ -122,6 +123,24 @@ async function editProblem(pid){
             <span style="align-self:center">${p.spj_compiled?'<span class="badge badge-AC">已编译</span>':'<span class="badge badge-PENDING">未编译</span>'}</span>
           </div>
           <div id="spj-log">${p.spj_log?`<div class="spj-log ${p.spj_compiled?'spj-ok':'spj-err'}">${esc(p.spj_log)}</div>`:''}</div>
+        </div>
+
+        <div id="func-box" style="display:none">
+          <h3 style="margin:16px 0 8px;font-size:14px;">函数式交互</h3>
+          <div class="form-hint" style="margin-bottom:8px">
+            选手 <code>#include "interaction.h"</code> 并编写 <code>main</code>。
+            评测把选手代码与 <code>grader.cpp</code> 链在一起编译。
+            <strong>grader 不要写 main</strong>（与选手抢入口）。
+            测试数据走 stdin；grader 用 <code>exit(0)</code> 表示通过、<code>exit(1)</code> 表示 WA。
+            若测试点有 .out，还会比对 stdout。
+          </div>
+          <div class="flex gap8" style="margin-bottom:8px">
+            <button class="btn btn-sm btn-default" onclick="loadFuncTemplate()">载入模板（猜数字）</button>
+          </div>
+          <div class="form-group"><label>interaction.h（选手可见）</label>
+            <textarea id="f_func_h" rows="10" spellcheck="false">${esc(p.interact_header||'')}</textarea></div>
+          <div class="form-group"><label>grader.cpp（实现，选手不可见）</label>
+            <textarea id="f_func_g" rows="16" spellcheck="false">${esc(p.grader_source||'')}</textarea></div>
         </div>
 
         <h3 style="margin:16px 0 8px;font-size:14px;">文件流 IO（可选）</h3>
@@ -215,8 +234,16 @@ async function editProblem(pid){
 }
 
 function toggleSpj(){
-  const on = document.getElementById('f_checker').value==='spj';
-  document.getElementById('spj-box').style.display = on?'block':'none';
+  const v = document.getElementById('f_checker').value;
+  document.getElementById('spj-box').style.display = v==='spj'?'block':'none';
+  const fb=document.getElementById('func-box');
+  if(fb) fb.style.display = v==='functional'?'block':'none';
+}
+async function loadFuncTemplate(){
+  const t = await API.get('/api/admin/functional_template');
+  document.getElementById('f_func_h').value = t.header;
+  document.getElementById('f_func_g').value = t.grader;
+  toast('已载入函数式交互模板','success');
 }
 async function loadSpjTemplate(){
   const t = await API.get('/api/admin/spj_template');
@@ -451,6 +478,7 @@ async function saveProblem(quiet){
     tags:g('f_tags'), interactive:g('f_inter'),
     checker_type:g('f_checker'), spj_source:g('f_spj'), std_source:g('f_std'), author:g('f_author'),
     file_io_in:g('f_fio_in'), file_io_out:g('f_fio_out'),
+    grader_source:g('f_func_g'), interact_header:g('f_func_h'),
     use_subtasks: useSubOn() ? '1' : '0',
     hack_validator: g('f_hack_val'),
     subtasks: JSON.stringify(editing.subtasks||[]),

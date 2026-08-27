@@ -227,7 +227,14 @@ async function loadSubs(){
       <span><strong>满分：</strong>${problem.score_total}</span>
       ${problem.author?`<span><strong>出题人：</strong>${esc(problem.author)}</span>`:''}
       ${(fioIn||fioOut)?'<span class="checker-badge">文件 IO</span>':''}
+      ${problem.functional?'<span class="checker-badge">函数式交互</span>':''}
     </div>
+    ${problem.functional?`<div class="file-io-banner">
+      <strong>函数式交互</strong>
+      <span>请 <code>#include "interaction.h"</code>，通过接口函数与评测交互，不要自己解析标准输入。</span>
+      ${problem.interact_header?`<details style="margin-top:8px"><summary style="cursor:pointer">查看 interaction.h</summary>
+        <pre class="code-body" style="margin-top:8px;white-space:pre-wrap">${esc(problem.interact_header)}</pre></details>`:''}
+    </div>`:''}
     ${fioBanner}
     <div class="problem-body-inner">
       ${sec('题目背景',problem.background)}

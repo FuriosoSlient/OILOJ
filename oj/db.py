@@ -214,6 +214,8 @@ MIGRATIONS = [
     ("problems", "file_io_out", "TEXT DEFAULT ''"),
     ("problems", "use_subtasks", "INTEGER DEFAULT 1"),
     ("problems", "hack_validator", "TEXT DEFAULT ''"),
+    ("problems", "grader_source", "TEXT DEFAULT ''"),
+    ("problems", "interact_header", "TEXT DEFAULT ''"),
 ]
 
 

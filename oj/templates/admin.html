@@ -90,6 +90,7 @@ function paneProblems(){
       <td>${p.is_public?'<span class="badge badge-AC">公开</span>':'<span class="badge badge-PENDING">私有</span>'}
           ${p.checker_type==='spj'?'<span class="checker-badge">SPJ</span>':''}
           ${p.interactive?'<span class="checker-badge">交互</span>':''}
+          ${p.checker_type==='functional'?'<span class="checker-badge">函数交互</span>':''}
           ${(p.file_io_in||p.file_io_out)?'<span class="checker-badge">文件 IO</span>':''}</td>
       <td>
         ${p.can_edit!==false

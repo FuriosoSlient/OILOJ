@@ -70,9 +70,11 @@ STATUS_MAP = {
     "SE": "System Error",
 }
 
-def compile_cpp(source_path: str, out_path: str, extra_flags=None) -> tuple[bool, str]:
+def compile_cpp(source_path: str, out_path: str, extra_flags=None, extra_sources=None) -> tuple[bool, str]:
     out_path = exe_path(out_path)
     flags = ["g++", "-std=c++20", "-O2", "-w", "-o", out_path, source_path]
+    if extra_sources:
+        flags += [str(s) for s in extra_sources if s]
     # Always expose testlib.h so special judges / interactors can include it.
     if LIB_DIR.exists():
         flags += [f"-I{LIB_DIR}"]
@@ -299,6 +301,50 @@ def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb,
 def token_compare(a: str, b: str) -> bool:
     return a.split() == b.split()
 
+
+def is_functional(problem) -> bool:
+    return (problem.get("checker_type") or "") == "functional"
+
+
+def compile_functional(user_src, out_bin, pdir, work) -> tuple[bool, str]:
+    """Link contestant code with grader.cpp / interaction.h (函数式交互)."""
+    pdir = Path(pdir)
+    work = Path(work)
+    header = pdir / "interaction.h"
+    grader = pdir / "grader.cpp"
+    if header.exists():
+        try:
+            shutil.copy(header, work / "interaction.h")
+        except Exception:
+            pass
+    extras, flags = [], [f"-I{work}", f"-I{pdir}"]
+    if grader.exists() and (grader.read_text(encoding="utf-8", errors="replace") or "").strip():
+        gdst = work / "grader.cpp"
+        try:
+            shutil.copy(grader, gdst)
+        except Exception:
+            write_text(gdst, read_text(grader))
+        extras.append(str(gdst))
+    return compile_cpp(str(user_src), str(out_bin), extra_flags=flags, extra_sources=extras)
+
+
+def functional_verdict(status, rc, out, expected):
+    if status in ("TLE", "MLE", "SE"):
+        return status
+    if status == "RE":
+        if rc in (1, 2):
+            return "WA"
+        if rc in (0, 7):
+            status = "AC"
+        else:
+            return "RE"
+    if status == "AC":
+        if expected is not None:
+            return "AC" if token_compare(out, expected) else "WA"
+        return "AC"
+    return status
+
+
 def judge_submission(problem, code, hack_input=None, progress=None):
     """
     Evaluate a submission.
@@ -316,7 +362,11 @@ def judge_submission(problem, code, hack_input=None, progress=None):
         src = work / "sol.cpp"
         binp = work / ("sol" + EXE)
         write_text(src, code)
-        ok, err = compile_cpp(str(src), str(binp))
+        functional = is_functional(problem)
+        if functional:
+            ok, err = compile_functional(src, binp, pdir, work)
+        else:
+            ok, err = compile_cpp(str(src), str(binp))
         if not ok:
             return {"status": "CE", "score": 0, "subtask_scores": [],
                     "case_results": [], "message": err}
@@ -325,7 +375,7 @@ def judge_submission(problem, code, hack_input=None, progress=None):
         tl = problem.get("time_limit", 1000)
         ml = problem.get("memory_limit", 256)
         validator_src = problem.get("validator")
-        interactive = problem.get("interactive", 0)
+        interactive = 0 if functional else problem.get("interactive", 0)
         fio_in = safe_io_name(problem.get("file_io_in") or "")
         fio_out = safe_io_name(problem.get("file_io_out") or "")
 
@@ -468,7 +518,9 @@ def judge_submission(problem, code, hack_input=None, progress=None):
                         str(binp), None, tl, ml, cwd=str(work),
                         file_in=fio_in or None, file_out=fio_out or None,
                         stdin_path=str(infile))
-                    if status == "AC":
+                    if functional:
+                        status = functional_verdict(status, rc, out, expected)
+                    elif status == "AC":
                         if checker_bin:
                             inp = read_text(infile)
                             okc, msgc = run_checker(str(checker_bin), inp, out, expected, pdir)
@@ -634,10 +686,22 @@ def run_interactive(sol_bin, interactor_bin, input_data, tl, pdir):
 HACK_VICTIM_RUNS = 5
 
 
-def _prepare_reference(pdir, tl, ml):
+def _prepare_reference(pdir, tl, ml, problem=None):
     """Ensure pdir/ref exists and is executable. Returns the path or None."""
     ref_bin = Path(exe_path(pdir / "ref"))
     ref_src = pdir / "ref.cpp"
+    if problem and is_functional(problem) and ref_src.exists():
+        work = Path(tempfile.mkdtemp(prefix="ref_"))
+        try:
+            ok, _ = compile_functional(ref_src, ref_bin, pdir, work)
+            if ok and ref_bin.exists():
+                try:
+                    ref_bin.chmod(0o755)
+                except Exception:
+                    pass
+                return ref_bin
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
     if ref_bin.exists() and not os.access(ref_bin, os.X_OK):
         try:
             ref_bin.chmod(0o755)
@@ -674,10 +738,13 @@ def _build_checker(problem, pdir, work):
     return None, ""
 
 
-def _run_one(binp, inp, tl, ml, label, cwd=None, file_in=None, file_out=None):
+def _run_one(binp, inp, tl, ml, label, cwd=None, file_in=None, file_out=None,
+             functional=False):
     """Execute a program once and package the outcome for the UI."""
     rc, out, err, status, elapsed, rss = run_process(
         str(binp), inp, tl, ml, cwd=cwd, file_in=file_in, file_out=file_out)
+    if functional:
+        status = functional_verdict(status, rc, out, None)
     return {
         "label": label,
         "status": status,
@@ -747,7 +814,7 @@ def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
                         "message": f"数据校验器拒绝该输入：{msgv}",
                         "detail": detail}
 
-        ref_bin = _prepare_reference(pdir, tl, ml)
+        ref_bin = _prepare_reference(pdir, tl, ml, problem)
         if not ref_bin:
             return {"verdict": "INVALID",
                     "message": "该题缺少标程(ref.cpp)，无法验证 Hack 数据",
@@ -757,8 +824,10 @@ def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
         # than a contestant's solution is allowed.
         fio_in = safe_io_name(problem.get("file_io_in") or "")
         fio_out = safe_io_name(problem.get("file_io_out") or "")
+        fun = is_functional(problem)
         std = _run_one(ref_bin, hack_input, max(tl * 5, 10000), 0, "标准程序 (std)",
-                       cwd=str(work), file_in=fio_in or None, file_out=fio_out or None)
+                       cwd=str(work), file_in=fio_in or None, file_out=fio_out or None,
+                       functional=fun)
         detail["stages"].append(std)
         if std["status"] != "AC":
             return {"verdict": "INVALID",
@@ -769,7 +838,8 @@ def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
         checker_bin, cerr = _build_checker(problem, pdir, work)
         if cerr:
             return {"verdict": "SE", "message": cerr, "detail": detail}
-        detail["checker"] = "SPJ (testlib)" if checker_bin else "逐 token 比对"
+        detail["checker"] = ("函数式交互" if fun else
+                             ("SPJ (testlib)" if checker_bin else "逐 token 比对"))
 
         def verify(out_text):
             """Judge one contestant output against the std answer."""
@@ -782,13 +852,14 @@ def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
         # ---- stage 2: attacker's own solution --------------------------------
         if attacker_code:
             abin = work / ("atk" + EXE)
-            ok, clog = compile_cpp_source(attacker_code, abin, work, "atk.cpp")
+            ok, clog = compile_cpp_source(attacker_code, abin, work, "atk.cpp", problem, pdir)
             if not ok:
                 return {"verdict": "INVALID",
                         "message": f"攻击方代码编译失败，无法验证数据合法性: {clog[:300]}",
                         "detail": detail}
             atk = _run_one(abin, hack_input, tl, ml, "攻击方程序",
-                           cwd=str(work), file_in=fio_in or None, file_out=fio_out or None)
+                           cwd=str(work), file_in=fio_in or None, file_out=fio_out or None,
+                           functional=fun)
             if atk["status"] == "AC":
                 okc, msg = verify(atk["output"])
                 atk["checker"] = msg
@@ -840,8 +911,10 @@ def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
         shutil.rmtree(work, ignore_errors=True)
 
 
-def compile_cpp_source(code, out_bin, work, filename="tmp.cpp"):
+def compile_cpp_source(code, out_bin, work, filename="tmp.cpp", problem=None, pdir=None):
     """Compile in-memory C++ source to `out_bin`."""
     src = work / filename
     write_text(src, code)
+    if problem and is_functional(problem) and pdir:
+        return compile_functional(src, out_bin, pdir, work)
     return compile_cpp(str(src), str(out_bin))

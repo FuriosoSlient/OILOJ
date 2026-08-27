@@ -382,6 +382,7 @@ def strip_problem(problem, vis):
     if not vis["reveal_hack_data"]:
         d.pop("validator", None)
         d.pop("hack_validator", None)
+    d.pop("grader_source", None)
     return d
 
 async def compute_oil_state(db, contest, viewer=None):
@@ -450,6 +451,7 @@ async def compute_oil_state(db, contest, viewer=None):
                 "visible": can_see, "can_submit": can_submit, "is_own": bool(is_own),
                 "subtasks": p["subtasks"],
                 "file_io": bool((p.get("file_io_in") or "") or (p.get("file_io_out") or "")),
+                "functional": (p.get("checker_type") or "") == "functional",
             })
         else:
             # 做题阶段锁题后可见；公开 Hack 阶段未锁题也可看（以便提交拿 Hack 资格）
@@ -466,6 +468,7 @@ async def compute_oil_state(db, contest, viewer=None):
                 "score_total": p["score_total"], "visible": can_see, "can_submit": can_submit,
                 "subtasks": p["subtasks"],
                 "file_io": bool((p.get("file_io_in") or "") or (p.get("file_io_out") or "")),
+                "functional": (p.get("checker_type") or "") == "functional",
             })
 
     # Compute scores
@@ -932,6 +935,7 @@ async def api_problems(contest_id: Optional[int] = None, user=Depends(current_us
                 "file_io_in": fio_in,
                 "file_io_out": fio_out,
                 "file_io": bool(fio_in or fio_out),
+                "functional": (p.get("checker_type") or "") == "functional",
             })
         return {"problems": out}
     finally:
@@ -955,6 +959,20 @@ async def api_problem(pid: int, contest_id: Optional[int] = None, user=Depends(c
                 if f.is_file() and not f.name.startswith("."):
                     atts.append({"name": f.name, "size": f.stat().st_size})
         out["attachments"] = atts
+        hdr = (p.get("interact_header") or "").strip()
+        if not hdr:
+            hp = BASE / "data" / "problems" / (p.get("slug") or f"p{pid}") / "interaction.h"
+            if hp.exists():
+                try:
+                    hdr = hp.read_text(encoding="utf-8")
+                except Exception:
+                    hdr = ""
+        if (p.get("checker_type") or "") == "functional":
+            out["functional"] = True
+            out["interact_header"] = hdr
+        else:
+            out["functional"] = False
+        out.pop("grader_source", None)
         # After the contest ends, publish the hack data submitted against this problem.
         if vis["reveal_hack_data"]:
             cur = await db.execute(
@@ -2139,6 +2157,54 @@ int main(int argc, char* argv[]) {
 }
 """
 
+FUNC_HEADER_TEMPLATE = r"""#ifndef INTERACTION_H
+#define INTERACTION_H
+
+int get_n();
+int query(int x);
+void answer(int x);
+
+#endif
+"""
+
+FUNC_GRADER_TEMPLATE = r"""#include "interaction.h"
+#include <bits/stdc++.h>
+using namespace std;
+
+// 函数式交互 grader：不要写 main（main 在选手代码里）。
+// stdin 读入测试数据。合法结束 exit(0)；答案错误 exit(1)。
+// 若测试点有 .out，stdout 还会再和标准输出逐 token 比对。
+
+static int n, secret, qcnt, answered;
+
+int get_n() { return n; }
+
+int query(int x) {
+    qcnt++;
+    if (qcnt > 40) { cerr << "too many queries\n"; exit(1); }
+    if (x < secret) return -1;
+    if (x > secret) return 1;
+    return 0;
+}
+
+void answer(int x) {
+    answered = 1;
+    if (x == secret) exit(0);
+    exit(1);
+}
+
+struct GraderInit {
+    GraderInit() {
+        ios::sync_with_stdio(false);
+        cin.tie(nullptr);
+        if (!(cin >> n >> secret)) exit(3);
+    }
+    ~GraderInit() {
+        if (!answered) exit(1);
+    }
+} _grader_init;
+"""
+
 
 @app.get("/api/admin/overview")
 async def admin_overview(user=Depends(current_user)):
@@ -2233,6 +2299,16 @@ async def admin_get_problem(pid: int, user=Depends(current_user)):
                     p["std_source"] = ref.read_text(encoding="utf-8")
                 except Exception:
                     pass
+            if not (p.get("grader_source") or "").strip() and (pdir / "grader.cpp").exists():
+                try:
+                    p["grader_source"] = (pdir / "grader.cpp").read_text(encoding="utf-8")
+                except Exception:
+                    pass
+            if not (p.get("interact_header") or "").strip() and (pdir / "interaction.h").exists():
+                try:
+                    p["interact_header"] = (pdir / "interaction.h").read_text(encoding="utf-8")
+                except Exception:
+                    pass
         p["files"] = files
         p["data_dir"] = str(pdir)
         adir = pdir / "attach"
@@ -2271,6 +2347,8 @@ async def admin_save_problem(
     subtasks: str = Form("[]"),
     checker_type: str = Form("token"),
     spj_source: str = Form(""),
+    grader_source: str = Form(""),
+    interact_header: str = Form(""),
     std_source: str = Form(""),
     author: Optional[str] = Form(None),
     file_io_in: str = Form(""),
@@ -2328,7 +2406,7 @@ async def admin_save_problem(
             score_total=score_total, difficulty=difficulty, is_public=1 if is_public else 0,
             tags=tags, position=position, interactive=1 if interactive else 0,
             subtasks=json.dumps(sts, ensure_ascii=False),
-            checker_type=checker_type if checker_type in ("token", "spj", "interactive") else "token",
+            checker_type=checker_type if checker_type in ("token", "spj", "interactive", "functional") else "token",
             file_io_in=os.path.basename((file_io_in or "").strip()),
             file_io_out=os.path.basename((file_io_out or "").strip()),
             use_subtasks=1 if int(use_subtasks or 0) else 0,
@@ -2344,6 +2422,10 @@ async def admin_save_problem(
             (pdir / "spj.cpp").write_text(spj_source or "", encoding="utf-8", newline="\n")
             fields["spj_source"] = spj_source or ""
             fields["spj_compiled"] = 0        # needs a rebuild after every edit
+        fields["grader_source"] = grader_source or ""
+        fields["interact_header"] = interact_header or ""
+        (pdir / "grader.cpp").write_text(grader_source or "", encoding="utf-8", newline="\n")
+        (pdir / "interaction.h").write_text(interact_header or "", encoding="utf-8", newline="\n")
         if id:
             sets = ",".join(f"{k}=?" for k in fields)
             await db.execute(f"UPDATE problems SET {sets} WHERE id=?", (*fields.values(), id))
@@ -2520,6 +2602,16 @@ async def admin_autodetect(pid: int, user=Depends(current_user)):
         return {"ok": True, "subtasks": sts, "use_subtasks": use_sub}
     finally:
         await db.close()
+
+
+@app.get("/api/admin/functional_template")
+async def admin_functional_template(user=Depends(current_user)):
+    db = await get_db()
+    try:
+        await require_problem_editor(db, user)
+    finally:
+        await db.close()
+    return {"header": FUNC_HEADER_TEMPLATE, "grader": FUNC_GRADER_TEMPLATE}
 
 
 @app.get("/api/admin/spj_template")
