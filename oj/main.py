@@ -2075,10 +2075,14 @@ async def api_hack(
         if kind == "personal":
             if phase != "solve":
                 raise HTTPException(403, "个人题只能在做题阶段 Hack")
-            # target must be opponent at same position
-            tgt = await db.execute("SELECT * FROM users WHERE id=?", (target_id,))
+            # target must be opponent at same seat in THIS contest (not global users.team_id)
+            tgt = await db.execute(
+                "SELECT team_id, position FROM contest_members WHERE contest_id=? AND user_id=?",
+                (contest_id, target_id))
             t = await tgt.fetchone()
-            if not t or t["team_id"] == user["team_id"] or t["position"] != user["position"]:
+            if not t or t["team_id"] is None or user.get("team_id") is None:
+                raise HTTPException(403, "只能 Hack 对方同位置选手")
+            if t["team_id"] == user["team_id"] or t["position"] != user["position"]:
                 raise HTTPException(403, "只能 Hack 对方同位置选手")
             # Accept both a JSON array ("[0,1]") and a comma-separated list ("0,1")
             raw = (subtask_indices or "").strip()
@@ -2101,9 +2105,11 @@ async def api_hack(
         elif kind == "team":
             if phase != "hack":
                 raise HTTPException(403, "团队题只能在公开 Hack 阶段 Hack")
-            tgt = await db.execute("SELECT team_id FROM users WHERE id=?", (target_id,))
+            tgt = await db.execute(
+                "SELECT team_id FROM contest_members WHERE contest_id=? AND user_id=?",
+                (contest_id, target_id))
             tr = await tgt.fetchone()
-            if not tr or tr["team_id"] == user["team_id"]:
+            if not tr or tr["team_id"] is None or tr["team_id"] == user.get("team_id"):
                 raise HTTPException(403, "目标无效")
             p = await fetch_problem(db, problem_id)
             if not p or p["problem_type"] != "thinking":
@@ -3252,8 +3258,10 @@ def run_hack_sync(hid):
         # ---- team hack: every distinct correct solution must break ----
         solvers = con.execute(
             "SELECT s.id, s.user_id, s.code, u.display_name FROM submissions s "
-            "JOIN users u ON u.id=s.user_id WHERE s.contest_id=? AND s.problem_id=? "
-            "AND u.team_id=? AND s.score>=?",
+            "JOIN users u ON u.id=s.user_id "
+            "JOIN contest_members cm ON cm.user_id=s.user_id AND cm.contest_id=s.contest_id "
+            "WHERE s.contest_id=? AND s.problem_id=? "
+            "AND cm.team_id=? AND s.score>=?",
             (h["contest_id"], h["problem_id"], h["target_team_id"], p_row["score_total"])).fetchall()
         if not solvers:
             finish("INVALID", "对方没有正确做法")

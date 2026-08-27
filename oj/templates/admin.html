@@ -268,7 +268,7 @@ function editContest(cid){
           <button type="button" class="btn btn-sm btn-primary" onclick="randomTeams(${cid})">随机分队（需勾选 10 人）</button>
           <button type="button" class="btn btn-sm btn-default" onclick="saveRoster(${cid})">保存名单（不分队）</button>
           <div class="muted" style="margin-top:8px;font-size:12px">
-            当前：${(c.roster||[]).map(m=>esc(m.display_name)+(m.position!=null?' P'+(m.position+1):'')).join('、')||'未设置'}
+            当前：${rosterSummary(c)}
           </div>
         </div></div>
         </div>
@@ -422,12 +422,29 @@ async function saveClassicRoster(cid){
     toast('报名名单已保存','success'); reload();
   }catch(e){ toast(e.message,'error'); }
 }
+function rosterSummary(c){
+  const tmap={};
+  (c.contest_teams||[]).forEach(t=>{ tmap[t.id]=t.name; });
+  const rows=(c.roster||[]).slice().sort((a,b)=>{
+    const ta=(a.team_id==null?999:a.team_id)-(b.team_id==null?999:b.team_id);
+    if(ta) return ta;
+    return (a.position||0)-(b.position||0);
+  });
+  return rows.map(m=>{
+    const tn=m.team_id!=null?(tmap[m.team_id]||('队伍'+m.team_id)):'未分队';
+    const p=m.position!=null?(' 位置'+(m.position+1)):'';
+    return esc(m.display_name)+' · '+tn+p;
+  }).join('、')||'未设置';
+}
 async function randomTeams(cid){
   const ids=[...document.querySelectorAll('.roster-cb')].filter(x=>x.checked).map(x=>x.value);
   if(ids.length!==10){ toast('请恰好勾选 10 名选手','error'); return; }
   try{
     const r=await API.post(`/api/admin/contest/${cid}/random_teams`,{user_ids:ids.join(',')});
-    toast('已随机分成 '+r.teams.map(t=>t.name).join(' / '),'success'); reload();
+    toast('已随机分成 '+r.teams.map(t=>t.name).join(' / '),'success');
+    await reload();
+    paneContests();
+    editContest(cid);
   }catch(e){ toast(e.message,'error'); }
 }
 async function delContest(cid){

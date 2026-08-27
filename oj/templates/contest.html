@@ -122,9 +122,19 @@ function connectSSE(){
   evt.onerror=()=>{ evt.close(); setTimeout(connectSSE,5000); };
 }
 
+function applyMeRoster(){
+  if(!me || !state || !state.members) return;
+  const m = state.members.find(x=>x.id===me.id);
+  if(m){
+    me.team_id = m.team_id;
+    me.position = m.position;
+  }
+}
+
 function render(force){
   const s=state;
   if(!s) return;
+  applyMeRoster();
   const fp = stateFingerprint(s);
   const typing = focusedKeep();
   // SSE ticks every 3s. Never tear down the Hack/chat form while the user is
