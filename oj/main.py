@@ -449,6 +449,7 @@ async def compute_oil_state(db, contest, viewer=None):
                 "score_total": p["score_total"], "position": pos, "which": which,
                 "visible": can_see, "can_submit": can_submit, "is_own": bool(is_own),
                 "subtasks": p["subtasks"],
+                "file_io": bool((p.get("file_io_in") or "") or (p.get("file_io_out") or "")),
             })
         else:
             # 做题阶段锁题后可见；公开 Hack 阶段未锁题也可看（以便提交拿 Hack 资格）
@@ -464,6 +465,7 @@ async def compute_oil_state(db, contest, viewer=None):
                 "slot": slot, "id": p["id"], "title": pub_title(p), "type": p["problem_type"],
                 "score_total": p["score_total"], "visible": can_see, "can_submit": can_submit,
                 "subtasks": p["subtasks"],
+                "file_io": bool((p.get("file_io_in") or "") or (p.get("file_io_out") or "")),
             })
 
     # Compute scores
@@ -913,6 +915,8 @@ async def api_problems(contest_id: Optional[int] = None, user=Depends(current_us
                 attempt = "tried"
             else:
                 attempt = "none"
+            fio_in = (p.get("file_io_in") or "").strip()
+            fio_out = (p.get("file_io_out") or "").strip()
             out.append({
                 "id": p["id"], "slug": p["slug"], "title": p["title"],
                 "problem_type": p["problem_type"], "score_total": p["score_total"],
@@ -925,6 +929,9 @@ async def api_problems(contest_id: Optional[int] = None, user=Depends(current_us
                 "attempt": attempt,
                 "my_score": (mb["best"] if mb else None),
                 "has_std": bool((p.get("std_source") or "").strip()),
+                "file_io_in": fio_in,
+                "file_io_out": fio_out,
+                "file_io": bool(fio_in or fio_out),
             })
         return {"problems": out}
     finally:

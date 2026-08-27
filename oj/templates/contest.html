@@ -283,6 +283,7 @@ function renderProblems(s){
       html+=`<div class="problem-tile ${!canSee?'locked-hidden':''}">
         <div class="pt-title">
           <span class="pt-type type-personal">个人题 位置${(p.position||0)+1}${p.which!=null?' · '+(p.which===0?'A':'B'):''}</span>
+          ${p.file_io?'<span class="checker-badge">文件 IO</span>':''}
           ${mine?'<span class="badge badge-SUCCESS" style="margin-left:6px;">我的题</span>':''}
           ${lockedOut?'<span class="badge badge-INVALID" style="margin-left:6px;">已锁定</span>':''}
         </div>
@@ -303,6 +304,7 @@ function renderProblems(s){
       html+=`<div class="problem-tile ${!canSee?'locked-hidden':''}">
         <div class="pt-title">
           <span class="pt-type ${cls}">${p.type==='mystery'?'神秘题':'思维题'}</span>
+          ${p.file_io?'<span class="checker-badge">文件 IO</span>':''}
         </div>
         <div style="margin:8px 0;font-weight:600;font-size:15px;">${canSee?esc(p.title):'🔒 锁题后解锁'}</div>
         <div class="pt-meta">

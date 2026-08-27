@@ -402,6 +402,16 @@ textarea.code-editor{width:100%;min-height:340px;border:none;border-radius:0;res
 .checker-badge{
   display:inline-block;padding:1px 7px;border-radius:3px;font-size:11px;
   background:#eef4fa;border:1px solid #d6e4f0;color:#2f7ed8;
+  margin-left:6px;vertical-align:middle;
+}
+.file-io-banner{
+  margin:10px 0 14px;padding:10px 14px;border-radius:6px;
+  background:#fff8e6;border:1px solid #ffe0a3;color:#5c4813;
+  display:flex;flex-wrap:wrap;gap:12px 18px;align-items:center;font-size:13px;
+}
+.file-io-banner code{
+  background:#fff;border:1px solid #f0d48a;padding:1px 6px;border-radius:3px;
+  font-family:'JetBrains Mono',Consolas,monospace;color:#8a5a00;
 }
 .empty-state{text-align:center;padding:40px 20px;color:#93a5b5}
 .empty-state .big{font-size:40px;margin-bottom:10px;opacity:.5}

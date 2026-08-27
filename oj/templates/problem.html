@@ -211,6 +211,13 @@ async function loadSubs(){
           }).join('')}
         </ul>
       </details>` : '';
+  const fioIn=(problem.file_io_in||'').trim(), fioOut=(problem.file_io_out||'').trim();
+  const fioBanner=(fioIn||fioOut)?`<div class="file-io-banner">
+      <strong>文件 IO</strong>
+      ${fioIn?`<span>输入文件：<code>${esc(fioIn)}</code></span>`:''}
+      ${fioOut?`<span>输出文件：<code>${esc(fioOut)}</code></span>`:''}
+      <span class="muted">请用上述文件名读写，而不是标准输入输出</span>
+    </div>`:'';
   document.getElementById('stmt').innerHTML=`
     <div class="problem-meta">
       <span><strong>类型：</strong>${typeMap[problem.problem_type]||'普通题'}</span>
@@ -219,7 +226,9 @@ async function loadSubs(){
       <span><strong>内存：</strong>${problem.memory_limit} MB</span>
       <span><strong>满分：</strong>${problem.score_total}</span>
       ${problem.author?`<span><strong>出题人：</strong>${esc(problem.author)}</span>`:''}
+      ${(fioIn||fioOut)?'<span class="checker-badge">文件 IO</span>':''}
     </div>
+    ${fioBanner}
     <div class="problem-body-inner">
       ${sec('题目背景',problem.background)}
       ${sec('题目描述',problem.description)}

@@ -42,6 +42,7 @@ const TYPE={personal:['个人题','type-personal','diff-green'],thinking:['思�
       <td class="pl-status">${att}</td>
       <td class="mono">${p.id}</td>
       <td><a href="/problem/${p.id}">${esc(p.title)}</a>
+        ${p.file_io?'<span class="checker-badge" title="'+(esc((p.file_io_in||'')+(p.file_io_in&&p.file_io_out?' / ':'' )+(p.file_io_out||'')))+'">文件 IO</span>':''}
         ${showTags?`<span class="muted" style="font-size:11px;margin-left:6px">${esc(p.tags)}</span>`:''}</td>
       <td><span class="pt-type ${tcls}">${tname}</span></td>
       <td>${difficultyBadge(p.difficulty,p.difficulty_hidden)||'<span class="muted">-</span>'}</td>

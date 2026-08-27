@@ -89,7 +89,8 @@ function paneProblems(){
       <td class="mono">${p.subtask_count} / ${p.case_count}</td>
       <td>${p.is_public?'<span class="badge badge-AC">公开</span>':'<span class="badge badge-PENDING">私有</span>'}
           ${p.checker_type==='spj'?'<span class="checker-badge">SPJ</span>':''}
-          ${p.interactive?'<span class="checker-badge">交互</span>':''}</td>
+          ${p.interactive?'<span class="checker-badge">交互</span>':''}
+          ${(p.file_io_in||p.file_io_out)?'<span class="checker-badge">文件 IO</span>':''}</td>
       <td>
         ${p.can_edit!==false
           ? `<button class="btn btn-sm btn-default" onclick="location.href='/admin/problem/${p.id}'">编辑</button>
@@ -160,7 +161,11 @@ function editContest(cid){
   const c = cid ? DATA.contests.find(x=>x.id===cid)
                 : {id:null,name:'',label:'',description:'',start_time:Date.now()/1000,
                    solve_duration:7200,hack_duration:3600,is_published:1,mode:'oil',is_rated:0,problems:[],roster:[],contest_teams:[]};
-  const cur = {}; (c.problems||[]).forEach(p=>cur[p.slot]=p.id);
+  const cur = {};
+  (c.problems||[]).forEach(p=>{
+    cur[p.slot]=p.id;
+    if(/^personal:\d+$/.test(p.slot)) cur[p.slot+':0']=p.id;
+  });
   const opts = pid => ['<option value="">— 不设置 —</option>'].concat(
       DATA.problems.map(p=>`<option value="${p.id}" ${pid===p.id?'selected':''}>#${p.id} ${esc(p.title)} (${p.score_total}分)</option>`)
     ).join('');
