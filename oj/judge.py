@@ -341,15 +341,30 @@ def is_functional(problem) -> bool:
     return (problem.get("checker_type") or "") == "functional"
 
 
-def compile_functional(user_src, out_bin, pdir, work) -> tuple[bool, str]:
+def header_filename(problem=None, name=None):
+    n = safe_io_name(name or (problem or {}).get("interact_header_name") or "")
+    if not n:
+        n = "interaction.h"
+    low = n.lower()
+    if not (low.endswith(".h") or low.endswith(".hpp") or low.endswith(".hh")):
+        n = n + ".h"
+    return n
+
+
+def compile_functional(user_src, out_bin, pdir, work, problem=None) -> tuple[bool, str]:
     """Link contestant code with grader.cpp (grader provides main)."""
     pdir = Path(pdir)
     work = Path(work)
-    header = pdir / "interaction.h"
+    hname = header_filename(problem)
+    header = pdir / hname
+    if not header.exists():
+        header = pdir / "interaction.h"
+        if header.exists() and hname != "interaction.h":
+            hname = header_filename(None, "interaction.h")
     grader = pdir / "grader.cpp"
     if header.exists():
         try:
-            shutil.copy(header, work / "interaction.h")
+            shutil.copy(header, work / hname)
         except Exception:
             pass
     extras, flags = [], [f"-I{work}", f"-I{pdir}"]
@@ -398,7 +413,7 @@ def judge_submission(problem, code, hack_input=None, progress=None):
         write_text(src, code)
         functional = is_functional(problem)
         if functional:
-            ok, err = compile_functional(src, binp, pdir, work)
+            ok, err = compile_functional(src, binp, pdir, work, problem)
         else:
             ok, err = compile_cpp(str(src), str(binp))
         if not ok:
@@ -551,7 +566,8 @@ def judge_submission(problem, code, hack_input=None, progress=None):
                     rc, out, err, status, elapsed, _ = run_process(
                         str(binp), None, tl, ml, cwd=str(work),
                         file_in=fio_in or None, file_out=fio_out or None,
-                        stdin_path=str(infile))
+                        stdin_path=str(infile),
+                        ans_path=(str(outfile) if functional and outfile and outfile.exists() else None))
                     if functional:
                         status = functional_verdict(status, rc, out, expected)
                     elif status == "AC":
@@ -727,7 +743,7 @@ def _prepare_reference(pdir, tl, ml, problem=None):
     if problem and is_functional(problem) and ref_src.exists():
         work = Path(tempfile.mkdtemp(prefix="ref_"))
         try:
-            ok, _ = compile_functional(ref_src, ref_bin, pdir, work)
+            ok, _ = compile_functional(ref_src, ref_bin, pdir, work, problem)
             if ok and ref_bin.exists():
                 try:
                     ref_bin.chmod(0o755)
@@ -898,7 +914,7 @@ def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
                         "detail": detail}
             atk = _run_one(abin, hack_input, tl, ml, "攻击方程序",
                            cwd=str(work), file_in=fio_in or None, file_out=fio_out or None,
-                           functional=fun)
+                           functional=fun, ans_path=hack_ans)
             if atk["status"] == "AC":
                 okc, msg = verify(atk["output"])
                 atk["checker"] = msg

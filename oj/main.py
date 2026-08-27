@@ -39,7 +39,7 @@ _patch_parser(_fp.FormParser)
 
 sys.path.insert(0, str(Path(__file__).parent))
 from db import get_db, init_db, hash_password, verify_password, create_session, user_from_token
-from judge import judge_submission, evaluate_hack
+from judge import judge_submission, evaluate_hack, header_filename
 
 BASE = Path(__file__).parent
 STATIC = BASE / "static"
@@ -959,17 +959,22 @@ async def api_problem(pid: int, contest_id: Optional[int] = None, user=Depends(c
                 if f.is_file() and not f.name.startswith("."):
                     atts.append({"name": f.name, "size": f.stat().st_size})
         out["attachments"] = atts
+        hname = header_filename(p)
         hdr = (p.get("interact_header") or "").strip()
         if not hdr:
-            hp = BASE / "data" / "problems" / (p.get("slug") or f"p{pid}") / "interaction.h"
-            if hp.exists():
-                try:
-                    hdr = hp.read_text(encoding="utf-8")
-                except Exception:
-                    hdr = ""
+            pdir = BASE / "data" / "problems" / (p.get("slug") or f"p{pid}")
+            for cand in (pdir / hname, pdir / "interaction.h"):
+                if cand.exists():
+                    try:
+                        hdr = cand.read_text(encoding="utf-8")
+                        hname = cand.name
+                    except Exception:
+                        hdr = ""
+                    break
         if (p.get("checker_type") or "") == "functional":
             out["functional"] = True
             out["interact_header"] = hdr
+            out["interact_header_name"] = hname
         else:
             out["functional"] = False
         out.pop("grader_source", None)
@@ -2315,11 +2320,15 @@ async def admin_get_problem(pid: int, user=Depends(current_user)):
                     p["grader_source"] = (pdir / "grader.cpp").read_text(encoding="utf-8")
                 except Exception:
                     pass
-            if not (p.get("interact_header") or "").strip() and (pdir / "interaction.h").exists():
-                try:
-                    p["interact_header"] = (pdir / "interaction.h").read_text(encoding="utf-8")
-                except Exception:
-                    pass
+            if not (p.get("interact_header") or "").strip():
+                hname = header_filename(p)
+                for cand in (pdir / hname, pdir / "interaction.h"):
+                    if cand.exists():
+                        try:
+                            p["interact_header"] = cand.read_text(encoding="utf-8")
+                        except Exception:
+                            pass
+                        break
         p["files"] = files
         p["data_dir"] = str(pdir)
         adir = pdir / "attach"
@@ -2360,6 +2369,7 @@ async def admin_save_problem(
     spj_source: str = Form(""),
     grader_source: str = Form(""),
     interact_header: str = Form(""),
+    interact_header_name: str = Form("interaction.h"),
     std_source: str = Form(""),
     author: Optional[str] = Form(None),
     file_io_in: str = Form(""),
@@ -2435,8 +2445,10 @@ async def admin_save_problem(
             fields["spj_compiled"] = 0        # needs a rebuild after every edit
         fields["grader_source"] = grader_source or ""
         fields["interact_header"] = interact_header or ""
+        hname = header_filename(None, interact_header_name)
+        fields["interact_header_name"] = hname
         (pdir / "grader.cpp").write_text(grader_source or "", encoding="utf-8", newline="\n")
-        (pdir / "interaction.h").write_text(interact_header or "", encoding="utf-8", newline="\n")
+        (pdir / hname).write_text(interact_header or "", encoding="utf-8", newline="\n")
         if id:
             sets = ",".join(f"{k}=?" for k in fields)
             await db.execute(f"UPDATE problems SET {sets} WHERE id=?", (*fields.values(), id))
@@ -3062,11 +3074,12 @@ def run_judge_sync(sid):
         row = con.execute(
             "SELECT s.code AS _code, p.id, p.slug, p.time_limit, p.memory_limit, p.subtasks, "
             "p.validator, p.interactive, p.score_total, p.checker_type, "
-            "p.file_io_in, p.file_io_out, p.use_subtasks "
+            "p.file_io_in, p.file_io_out, p.use_subtasks, p.interact_header_name "
             "FROM submissions s JOIN problems p ON p.id=s.problem_id WHERE s.id=?", (sid,)).fetchone()
         if not row: return
         keys = ("id","slug","time_limit","memory_limit","subtasks","validator","interactive",
-                "score_total","checker_type","file_io_in","file_io_out","use_subtasks")
+                "score_total","checker_type","file_io_in","file_io_out","use_subtasks",
+                "interact_header_name")
         p = {k: (row[k] if k in row.keys() else "") for k in keys}
         p["subtasks"] = json.loads(p["subtasks"] or "[]")
         code = row["_code"]
@@ -3179,7 +3192,8 @@ def run_hack_sync(hid):
 
         p_row = con.execute("SELECT * FROM problems WHERE id=?", (h["problem_id"],)).fetchone()
         want = ("id","slug","time_limit","memory_limit","subtasks","validator","interactive",
-                "score_total","checker_type","file_io_in","file_io_out","use_subtasks","hack_validator")
+                "score_total","checker_type","file_io_in","file_io_out","use_subtasks","hack_validator",
+                "interact_header_name")
         p = {k: p_row[k] for k in p_row.keys() if k in want}
         p["subtasks"] = json.loads(p["subtasks"] or "[]")
 

@@ -75,10 +75,14 @@ int main(){
 }
 `};
 
+function headerName(){
+  return (problem && problem.interact_header_name) ? problem.interact_header_name : 'interaction.h';
+}
 function loadSample(){
   if(problem && problem.functional){
+    const h=headerName();
     document.getElementById('code').value=
-`#include "interaction.h"
+`#include "${h}"
 
 void solve(){
     int n = get_n();
@@ -243,9 +247,9 @@ async function loadSubs(){
     </div>
     ${problem.functional?`<div class="file-io-banner">
       <strong>函数式交互</strong>
-      <span>请 <code>#include "interaction.h"</code> 实现接口函数（如 <code>solve()</code>）。
+      <span>请 <code>#include "${esc(problem.interact_header_name||'interaction.h')}"</code> 实现接口函数（如 <code>solve()</code>）。
         <strong>不要写 main</strong>，也不要读标准输入；询问由 grader 在线回答。</span>
-      ${problem.interact_header?`<details style="margin-top:8px"><summary style="cursor:pointer">查看 interaction.h</summary>
+      ${problem.interact_header?`<details style="margin-top:8px"><summary style="cursor:pointer">查看 ${esc(problem.interact_header_name||'interaction.h')}</summary>
         <pre class="code-body" style="margin-top:8px;white-space:pre-wrap">${esc(problem.interact_header)}</pre></details>`:''}
     </div>`:''}
     ${fioBanner}
@@ -269,7 +273,7 @@ async function loadSubs(){
       ${hackSec}
     </div>`;
   if(problem.functional){
-    document.getElementById('code').placeholder='// 不要写 main。#include "interaction.h" 并实现 solve() ...';
+    document.getElementById('code').placeholder='// 不要写 main。#include "'+esc(problem.interact_header_name||'interaction.h')+'" 并实现 solve() ...';
   }
   loadSubs();
 })();

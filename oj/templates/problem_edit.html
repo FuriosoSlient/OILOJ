@@ -40,7 +40,7 @@ async function editProblem(pid){
            constraints:'',time_limit:1000,memory_limit:256,problem_type:'standard',score_total:100,
            difficulty:'',is_public:0,tags:'',position:null,interactive:0,subtasks:[],
            checker_type:'token',spj_source:'',spj_compiled:0,spj_log:'',author:'',std_source:'',
-           file_io_in:'',file_io_out:'',use_subtasks:1,hack_validator:'',grader_source:'',interact_header:'',attachments:[]};
+           file_io_in:'',file_io_out:'',use_subtasks:1,hack_validator:'',grader_source:'',interact_header:'',interact_header_name:'interaction.h',attachments:[]};
   if(pid){ const r = await API.get(`/api/admin/problem/${pid}`); p = r.problem; }
   editing = p;
   const diffOpts = ['',...DIFFICULTIES].map(d=>
@@ -138,7 +138,12 @@ async function editProblem(pid){
           <div class="flex gap8" style="margin-bottom:8px">
             <button class="btn btn-sm btn-default" onclick="loadFuncTemplate()">载入模板</button>
           </div>
-          <div class="form-group"><label>interaction.h（选手可见）</label>
+          <div class="form-row">
+            <div class="form-group" style="flex:0 0 260px"><label>头文件名（选手 #include）</label>
+              <input type="text" id="f_func_hname" value="${esc(p.interact_header_name||'interaction.h')}" placeholder="interaction.h">
+              <span class="form-hint">如 grader.h / interactive.hpp，需带 .h/.hpp</span></div>
+          </div>
+          <div class="form-group"><label>头文件内容（选手可见）</label>
             <textarea id="f_func_h" rows="10" spellcheck="false">${esc(p.interact_header||'')}</textarea></div>
           <div class="form-group"><label>grader.cpp（实现，选手不可见）</label>
             <textarea id="f_func_g" rows="16" spellcheck="false">${esc(p.grader_source||'')}</textarea></div>
