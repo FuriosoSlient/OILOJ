@@ -25,10 +25,9 @@
 <script>
 let me=null, DATA=null, tab='problems', editing=null, ROLE='admin';
 
-const SLOTS = [
-  ...[0,1,2,3,4].map(i=>({key:`personal:${i}`, label:`个人题 P${i+1}（位置 ${i+1}）`})),
-  ...[0,1,2,3,4].map(i=>({key:`team:${i}`, label:`团队思维题 T${i+1}`})),
-  {key:'mystery', label:'神秘题（交互，禁止 Hack）'},
+const OIL_PERSONAL = [
+  {key:'personal:0', label:'个人题 P1（位置 1）'},
+  {key:'personal:1', label:'个人题 P2（位置 2）'},
 ];
 
 async function reload(){
@@ -220,16 +219,26 @@ function editContest(cid){
         </div></div>` : ''}
 
         <div id="oil-slots">
-        <h3 style="margin:16px 0 8px;font-size:14px;">题目配置（OIL 槽位）</h3>
+        <h3 style="margin:16px 0 8px;font-size:14px;">题目配置（OIL）</h3>
         <div class="form-hint" style="margin-bottom:8px">
-          比赛开始前所有题目对选手不可见；比赛期间按 OIL 规则可见且隐藏难度；比赛结束后全部公开并公布难度与 Hack 数据。
+          个人题固定 2 道，对应队员位置 1、2，满分在各题编辑页设置。团队题数量不限，可随时增减。
+          比赛开始前题目对选手不可见；赛时按 OIL 规则可见并隐藏难度；结束后公开。
         </div>
-        ${SLOTS.map(s=>`
+        <h4 style="margin:10px 0 6px;font-size:13px;color:#5a6d80">个人题（2 道）</h4>
+        ${OIL_PERSONAL.map(s=>`
           <div class="form-row" style="margin-bottom:6px">
             <div class="form-group" style="flex:0 0 220px;justify-content:center">
               <label style="font-size:13px;color:#2c3e50">${s.label}</label></div>
             <div class="form-group"><select id="slot_${s.key.replace(':','_')}">${opts(cur[s.key])}</select></div>
           </div>`).join('')}
+        <h4 style="margin:14px 0 6px;font-size:13px;color:#5a6d80">团队题（任意数量）</h4>
+        <div id="oil-team-list"></div>
+        <button type="button" class="btn btn-sm btn-default" onclick="addOilTeamSlot()">+ 添加团队题</button>
+        <div class="form-row" style="margin-top:12px">
+          <div class="form-group" style="flex:0 0 220px;justify-content:center">
+            <label style="font-size:13px;color:#2c3e50">神秘题（可选，禁止 Hack）</label></div>
+          <div class="form-group"><select id="slot_mystery">${opts(cur.mystery)}</select></div>
+        </div>
         </div>
         <div id="classic-slots" style="display:none">
         <h3 style="margin:16px 0 8px;font-size:14px;">题目列表（IOI / ICPC，按 A、B、C…）</h3>
@@ -239,7 +248,7 @@ function editContest(cid){
         ${ROLE==='admin' && cid ? `
         <div id="oil-roster-wrap">
         <h3 style="margin:16px 0 8px;font-size:14px;">本场参赛名单 / 随机分队</h3>
-        <div class="form-hint">OIL 需要 10 人随机分成红/蓝两队各 5 人并分配位置 1–5。每场比赛独立分队，不影响其他场。</div>
+        <div class="form-hint">OIL 默认 10 人随机分成红/蓝两队各 5 人。个人题只有 2 道，对应位置 1、2 的队员；其余位置只打团队题。每场独立分队。</div>
         <div class="form-row"><div class="form-group">
           <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">
             ${DATA.users.map(u=>`
@@ -282,11 +291,43 @@ function editContest(cid){
         </div>
       </div>
     </div>`;
-  window._classicInit = Object.keys(cur).filter(k=>k.startsWith('p')).sort();
+  window._classicInit = Object.keys(cur).filter(k=>/^p\d+$/.test(k)).sort((a,b)=>parseInt(a.slice(1))-parseInt(b.slice(1)));
   if(!window._classicInit.length) window._classicSlots = [null,null,null];
   else window._classicSlots = window._classicInit.map(k=>cur[k]);
+  const teamIdx = Object.keys(cur).filter(k=>k.startsWith('team:')).map(k=>parseInt(k.split(':')[1],10)).filter(n=>!isNaN(n));
+  const nTeam = teamIdx.length ? Math.max(...teamIdx)+1 : 1;
+  window._oilTeamSlots = [];
+  for(let i=0;i<nTeam;i++) window._oilTeamSlots.push(cur['team:'+i]||null);
   renderClassicSlots();
+  renderOilTeamSlots();
   toggleModeFields();
+}
+function problemOpts(pid){
+  return ['<option value="">— 不设置 —</option>'].concat(
+    DATA.problems.map(p=>`<option value="${p.id}" ${pid===p.id?'selected':''}>#${p.id} ${esc(p.title)} (${p.score_total}分)</option>`)
+  ).join('');
+}
+function renderOilTeamSlots(){
+  const box=document.getElementById('oil-team-list');
+  if(!box) return;
+  window._oilTeamSlots = window._oilTeamSlots || [null];
+  box.innerHTML = window._oilTeamSlots.map((pid,i)=>`
+    <div class="form-row" style="margin-bottom:6px">
+      <div class="form-group" style="flex:0 0 220px;justify-content:center">
+        <label style="font-size:13px;color:#2c3e50">团队题 T${i+1}</label></div>
+      <div class="form-group"><select id="oilteam_${i}" onchange="window._oilTeamSlots[${i}]=this.value?parseInt(this.value):null">${problemOpts(pid)}</select></div>
+      <div class="form-group" style="flex:0 0 auto;justify-content:flex-end">
+        <button type="button" class="btn btn-sm btn-danger" onclick="delOilTeamSlot(${i})">删除</button></div>
+    </div>`).join('') || '<div class="muted">暂无团队题，点击下方添加。</div>';
+}
+function addOilTeamSlot(){
+  window._oilTeamSlots = window._oilTeamSlots || [];
+  window._oilTeamSlots.push(null);
+  renderOilTeamSlots();
+}
+function delOilTeamSlot(i){
+  window._oilTeamSlots.splice(i,1);
+  renderOilTeamSlots();
 }
 function toggleModeFields(){
   const m=(document.getElementById('c_mode')||{}).value||'oil';
@@ -332,11 +373,18 @@ async function saveContest(cid){
     });
     const mapping={};
     if(mode==='oil'){
-      SLOTS.forEach(s=>{
+      OIL_PERSONAL.forEach(s=>{
         const el=document.getElementById('slot_'+s.key.replace(':','_'));
         const v=el&&el.value;
         if(v) mapping[s.key]=parseInt(v);
       });
+      (window._oilTeamSlots||[]).forEach((pid,i)=>{
+        const el=document.getElementById('oilteam_'+i);
+        const v=el&&el.value;
+        if(v) mapping['team:'+i]=parseInt(v);
+      });
+      const mys=document.getElementById('slot_mystery');
+      if(mys&&mys.value) mapping.mystery=parseInt(mys.value);
     }else{
       const n=(window._classicSlots||[]).length;
       for(let i=0;i<n;i++){
