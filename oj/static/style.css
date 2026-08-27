@@ -355,6 +355,7 @@ textarea.code-editor{width:100%;min-height:340px;border:none;border-radius:0;res
 .phase-solve{background:#2f7ed8}
 .phase-hack{background:#e67e22}
 .phase-after{background:#52c41a}
+.phase-virtual{background:#722ed1}
 .live-dot{
   display:inline-block;width:7px;height:7px;border-radius:50%;background:#52c41a;
   margin-right:5px;animation:pulse 1.4s infinite;

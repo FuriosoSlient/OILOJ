@@ -231,6 +231,10 @@ async def init_db():
             cols = {r[1] for r in await cur.fetchall()}
             if col not in cols:
                 await db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS contest_virtuals ("
+            "contest_id INTEGER NOT NULL, user_id INTEGER NOT NULL, "
+            "started_at REAL NOT NULL, PRIMARY KEY (contest_id, user_id))")
         await db.commit()
     finally:
         await db.close()

@@ -222,7 +222,7 @@ function fmtClock(secs){
 }
 
 function phaseLabel(p){
-  return {before:'未开始',solve:'比赛中',hack:'⚔️ 公开 Hack 阶段',after:'已结束'}[p]||p;
+  return {before:'未开始',solve:'比赛中',hack:'⚔️ 公开 Hack 阶段',after:'已结束',virtual:'虚拟参赛'}[p]||p;
 }
 
 function toast(msg, type='info'){

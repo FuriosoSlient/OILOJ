@@ -234,6 +234,9 @@ async function loadSubs(){
       (problem.subtasks&&problem.subtasks.length?`
       <h2>子任务</h2>
       ${problem.subtasks.map((st,i)=>`<p><strong>子任务 ${i+1}</strong>（${st.score} 分）：${esc(st.name)}</p>`).join('')}`:'')}
+      ${(problem.attachments||[]).length?`<h2>附件</h2><ul>${problem.attachments.map(a=>
+        `<li><a href="/api/problem/${problem.id}/attach/${encodeURIComponent(a.name)}${contestId?`?contest_id=${contestId}`:''}">${esc(a.name)}</a>
+          <span class="muted">${a.size}B</span></li>`).join('')}</ul>`:''}
       ${hackSec}
     </div>`;
   loadSubs();

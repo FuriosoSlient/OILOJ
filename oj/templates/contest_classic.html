@@ -33,25 +33,34 @@ function render(){
     `${C.label||('比赛 #'+C.id)} · ${C.name||''}  [${mode}${C.is_rated?' · Rated':''}]`;
   document.getElementById('phase-chip').innerHTML =
     `<span class="phase-chip phase-${s.phase}">${phaseLabel(s.phase)}</span>`;
-  document.getElementById('clock').textContent = s.phase==='after'?'已结束':fmtClock(s.remaining);
+  document.getElementById('clock').textContent =
+    (s.phase==='after' && !s.virtual_active)?'已结束':fmtClock(s.remaining);
   const probs=(s.problems||[]).filter(p=>p.visible);
   const rank=s.ranking||[];
   const n=C.registered_count||(s.registered_count||0);
   const reg=C.registered||s.viewer_registered;
-  const canReg=s.phase!=='after';
+  const canReg=s.can_register;
   let regBar='';
   if(me){
-    if(reg){
+    if(s.virtual_active){
+      regBar=`<div class="alert alert-info">虚拟参赛进行中：榜单按相对时间回放正式选手的提交，你的提交单独计入 VP，不影响 Rating。
+        剩余 <strong class="mono">${fmtClock(s.remaining)}</strong></div>`;
+    }else if(s.viewer_is_virtual){
+      regBar=`<div class="alert alert-success">你的虚拟参赛已结束。下方榜单为全程回放 + 你的 VP 成绩（不计入 Rating）。</div>`;
+    }else if(reg){
       regBar=`<div class="alert alert-success">你已报名（当前 ${n} 人）。${C.is_rated?'本场 Rated，结束后按报名选手成绩更新 Rating。':''}
         ${s.phase==='before'?`<button class="btn btn-sm btn-default" style="margin-left:8px" onclick="doUnreg()">取消报名</button>`:''}</div>`;
     }else if(canReg){
       regBar=`<div class="alert alert-warn">请先报名才能提交并计入榜单 / Rating。已报名 ${n} 人。
         <button class="btn btn-sm btn-primary" style="margin-left:8px" onclick="doReg()">报名参加</button></div>`;
+    }else if(s.can_virtual){
+      regBar=`<div class="alert alert-warn">比赛已结束。可以像 Codeforces 一样虚拟参赛：计时重新开始，榜单按相对时间模拟其他选手提交。
+        <button class="btn btn-sm btn-primary" style="margin-left:8px" onclick="doVP()">开始虚拟参赛</button></div>`;
     }else{
       regBar=`<div class="alert alert-info">比赛已结束。报名人数 ${n}。</div>`;
     }
   }else{
-    regBar=`<div class="alert alert-info">登录后可报名。已报名 ${n} 人。</div>`;
+    regBar=`<div class="alert alert-info">登录后可报名或虚拟参赛。已报名 ${n} 人。</div>`;
   }
   document.getElementById('app').innerHTML=`
     ${C.description?`<div class="card"><div class="card-body">${esc(C.description)}</div></div>`:''}
@@ -109,7 +118,7 @@ function classicBoard(s, C){
   rank.forEach(r=>{
     h+=`<tr>
       <td class="mono">${r.rank}</td>
-      <td style="text-align:left">${r.user_id?`<a href="/user/${r.user_id}">${esc(r.display_name||r.name||'')}</a>`:esc(r.display_name||r.name||'')}</td>
+      <td style="text-align:left">${r.user_id?`<a href="/user/${r.user_id}">${esc(r.display_name||r.name||'')}</a>`:esc(r.display_name||r.name||'')}${r.virtual?' <span class="badge badge-PENDING">VP</span>':''}</td>
       <td class="mono"><strong>${r.score??r.solved??0}</strong></td>
       ${icpc?`<td class="mono">${r.penalty||0}</td>`:''}`;
     probs.forEach(p=> h+=classicCell(mode, (r.problems||{})[String(p.id)], p.score_total));
@@ -124,6 +133,11 @@ async function doReg(){
 async function doUnreg(){
   if(!confirm('确定取消报名？')) return;
   try{ await API.post(`/api/contest/${cid}/unregister`,{}); toast('已取消报名','success'); await load(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function doVP(){
+  if(!confirm('开始虚拟参赛？计时将从现在起按原比赛时长走，期间榜单按相对时间回放正式选手提交。正式成绩与 Rating 不受影响。')) return;
+  try{ await API.post(`/api/contest/${cid}/virtual/start`,{}); toast('虚拟参赛已开始','success'); await load(); }
   catch(e){ toast(e.message,'error'); }
 }
 async function load(){

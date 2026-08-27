@@ -206,7 +206,7 @@ function renderClassic(){
   rank.forEach(r=>{
     h+=`<tr>
       <td class="mono">${r.rank}</td>
-      <td style="text-align:left">${r.user_id?`<a href="/user/${r.user_id}">${esc(r.display_name||r.name||'')}</a>`:esc(r.display_name||r.name||'')}</td>
+      <td style="text-align:left">${r.user_id?`<a href="/user/${r.user_id}">${esc(r.display_name||r.name||'')}</a>`:esc(r.display_name||r.name||'')}${r.virtual?' <span class="badge badge-PENDING">VP</span>':''}</td>
       <td class="mono"><strong>${r.score??r.solved??0}</strong></td>
       ${icpc?`<td class="mono">${r.penalty||0}</td>`:''}`;
     probs.forEach(p=> h+=classicCell(S.mode, (r.problems||{})[String(p.id)], p.score_total));
@@ -231,7 +231,7 @@ async function refresh(){
 
 setInterval(()=>{
   if(!S) return;
-  if(S.phase==='solve'||S.phase==='hack'){
+  if(S.phase==='solve'||S.phase==='hack'||S.phase==='virtual'){
     S.remaining=Math.max(0,S.remaining-1);
     document.getElementById('clock').textContent=fmtClock(S.remaining);
     if(++tick%5===0) refresh();

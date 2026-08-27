@@ -125,6 +125,19 @@ def phase_remaining(contest, now=None):
     if ph == "hack": return int(hack_end - now)
     return 0
 
+async def fetch_virtual(db, cid, uid):
+    if not uid:
+        return None
+    try:
+        cur = await db.execute(
+            "SELECT started_at FROM contest_virtuals WHERE contest_id=? AND user_id=?",
+            (cid, uid))
+        r = await cur.fetchone()
+        return dict(r) if r else None
+    except Exception:
+        return None
+
+
 async def is_locked(db, contest_id, user_id):
     row = await db.execute("SELECT 1 FROM personal_locks WHERE contest_id=? AND user_id=?", (contest_id, user_id))
     return await row.fetchone() is not None
@@ -1254,12 +1267,19 @@ async def api_submit(problem_id: int = Form(...), code: str = Form(...), contest
         if not p: raise HTTPException(404, "题目不存在")
         # If contest submission, enforce rules
         c = None
+        is_virt = 0
         if contest_id:
             c = await fetch_contest(db, contest_id)
             if not c: raise HTTPException(404, "比赛不存在")
             user = await apply_contest_roster(db, user, contest_id)
             phase = contest_phase(c)
-            if phase not in ("solve", "hack"):
+            vp = await fetch_virtual(db, contest_id, user["id"])
+            if phase == "after" and vp and is_personal_mode(c):
+                elapsed = time.time() - float(vp["started_at"])
+                if elapsed > float(c["solve_duration"] or 0):
+                    raise HTTPException(403, "虚拟参赛已结束")
+                is_virt = 1
+            elif phase not in ("solve", "hack"):
                 raise HTTPException(403, "当前阶段不能提交")
             slot_for_pid = None
             for slot, pp in c["problems"].items():
@@ -1267,7 +1287,9 @@ async def api_submit(problem_id: int = Form(...), code: str = Form(...), contest
             if not slot_for_pid:
                 raise HTTPException(403, "该题不在比赛中")
             mode = contest_mode(c)
-            if is_personal_mode(c):
+            if is_virt:
+                pass
+            elif is_personal_mode(c):
                 if phase != "solve":
                     raise HTTPException(403, "当前阶段不能提交")
                 if not is_admin(user):
@@ -1299,9 +1321,14 @@ async def api_submit(problem_id: int = Form(...), code: str = Form(...), contest
         locked_flag = 0
         if contest_id:
             locked_flag = 1 if await is_locked(db, contest_id, user["id"]) else 0
-        cur = await db.execute(
-            "INSERT INTO submissions(user_id,problem_id,contest_id,code,language,status,created_at,locked_submit) VALUES(?,?,?,?,?,?,?,?)",
-            (user["id"], problem_id, contest_id, code, "C++20", "PENDING", time.time(), locked_flag))
+        try:
+            cur = await db.execute(
+                "INSERT INTO submissions(user_id,problem_id,contest_id,code,language,status,created_at,locked_submit,is_virtual) VALUES(?,?,?,?,?,?,?,?,?)",
+                (user["id"], problem_id, contest_id, code, "C++20", "PENDING", time.time(), locked_flag, is_virt))
+        except Exception:
+            cur = await db.execute(
+                "INSERT INTO submissions(user_id,problem_id,contest_id,code,language,status,created_at,locked_submit) VALUES(?,?,?,?,?,?,?,?)",
+                (user["id"], problem_id, contest_id, code, "C++20", "PENDING", time.time(), locked_flag))
         sid = cur.lastrowid
         await db.commit()
         await JUDGE_QUEUE.put(sid)
@@ -1337,11 +1364,16 @@ async def api_contests(user=Depends(current_user)):
             except Exception:
                 c["registered_count"] = 0
             c["registered"] = False
+            c["can_virtual"] = False
+            c["virtual"] = False
             if user and c["mode"] in PERSONAL_MODES:
                 cur4 = await db.execute(
                     "SELECT 1 FROM contest_members WHERE contest_id=? AND user_id=?",
                     (c["id"], user["id"]))
                 c["registered"] = await cur4.fetchone() is not None
+                vp = await fetch_virtual(db, c["id"], user["id"])
+                c["virtual"] = bool(vp)
+                c["can_virtual"] = (c["phase"] == "after" and not c["registered"] and not vp)
             out.append(c)
         return {"contests": out}
     finally:
@@ -1528,21 +1560,65 @@ async def compute_classic_state(db, contest, viewer=None):
     problems = contest.get("problems") or {}
     roster = await contest_roster(db, cid)
     viewer_reg = bool(viewer and any(m["id"] == viewer["id"] for m in roster))
-    can_submit = phase == "solve" and bool(viewer) and (viewer_reg or is_admin(viewer))
+    vp = await fetch_virtual(db, cid, viewer["id"]) if viewer else None
+    vp_active = False
+    vp_elapsed = 0.0
+    if phase == "after" and vp and is_personal_mode(contest):
+        vp_elapsed = max(0.0, now - float(vp["started_at"]))
+        dur = float(contest["solve_duration"] or 0)
+        if vp_elapsed < dur:
+            phase = "virtual"
+            vp_active = True
+        else:
+            vp_elapsed = dur
+    can_submit = bool(viewer) and (
+        (phase == "solve" and (viewer_reg or is_admin(viewer)))
+        or vp_active
+    )
+    vis_phase = "solve" if phase == "virtual" else phase
     plist = []
     for slot, p in sorted(problems.items()):
         plist.append({
-            "slot": slot, "id": p["id"], "title": ("" if phase == "before" else p["title"]),
+            "slot": slot, "id": p["id"], "title": ("" if vis_phase == "before" else p["title"]),
             "type": p.get("problem_type"), "score_total": p["score_total"],
-            "visible": phase != "before",
+            "visible": vis_phase != "before",
             "can_submit": can_submit,
         })
 
     cur = await db.execute(
         "SELECT s.* FROM submissions s WHERE s.contest_id=? ORDER BY s.id", (cid,))
-    subs = [dict(r) for r in await cur.fetchall()]
-    people = roster
+    raw_subs = [dict(r) for r in await cur.fetchall()]
     start = contest["start_time"]
+    cutoff = None
+    if vp and vis_phase != "before" and contest_phase(contest, now) == "after":
+        cutoff = start + vp_elapsed
+    subs = []
+    for s in raw_subs:
+        try:
+            virt = int(s.get("is_virtual") or 0) == 1
+        except Exception:
+            virt = False
+        if virt:
+            if viewer and s["user_id"] == viewer["id"] and vp:
+                fake = start + max(0.0, float(s["created_at"]) - float(vp["started_at"]))
+                if cutoff is not None and fake > cutoff:
+                    continue
+                s = dict(s)
+                s["created_at"] = fake
+                subs.append(s)
+            continue
+        if cutoff is not None and float(s["created_at"] or 0) > cutoff:
+            continue
+        subs.append(s)
+    people = list(roster)
+    if viewer and vp and not viewer_reg:
+        people.append({
+            "id": viewer["id"], "display_name": viewer.get("display_name"),
+            "username": viewer.get("username"), "rating": viewer.get("rating", 1500),
+        })
+    remaining = phase_remaining(contest, now)
+    if phase == "virtual":
+        remaining = int(max(0, contest["solve_duration"] - vp_elapsed))
     ranking = []
 
     if mode == "icpc":
@@ -1597,14 +1673,17 @@ async def compute_classic_state(db, contest, viewer=None):
             })
         ranking.sort(key=lambda r: (-r["score"], r["user_id"]))
 
+    for r in ranking:
+        r["virtual"] = bool(viewer and vp and r.get("user_id") == viewer["id"] and not viewer_reg)
     for i, r in enumerate(ranking, 1):
         r["rank"] = i
     results_hidden = (mode == "oi" and not await can_view_oi_results(db, contest, viewer))
     if results_hidden:
         ranking = []
+    official_after = contest_phase(contest, now) == "after"
     return {
         "phase": phase, "now": now, "start": contest["start_time"],
-        "remaining": phase_remaining(contest, now),
+        "remaining": remaining,
         "mode": mode, "problems": plist, "ranking": ranking,
         "results_hidden": results_hidden,
         "members": ranking, "team_totals": {},
@@ -1612,7 +1691,12 @@ async def compute_classic_state(db, contest, viewer=None):
         "team_problem_score": {},
         "registered_count": len(roster),
         "viewer_registered": viewer_reg,
-        "can_register": phase != "after",
+        "can_register": contest_phase(contest, now) != "after",
+        "virtual": bool(vp),
+        "virtual_active": vp_active,
+        "can_virtual": bool(viewer and official_after and is_personal_mode(contest)
+                            and not viewer_reg and not vp),
+        "viewer_is_virtual": bool(viewer and vp),
     }
 
 
@@ -1768,6 +1852,35 @@ async def api_contest_unregister(cid: int, user=Depends(current_user)):
                          (cid, user["id"]))
         await db.commit()
         return {"ok": True, "registered": False}
+    finally:
+        await db.close()
+
+
+@app.post("/api/contest/{cid}/virtual/start")
+async def api_virtual_start(cid: int, user=Depends(current_user)):
+    """Start a Codeforces-style virtual participation after the contest ends."""
+    must_login(user)
+    db = await get_db()
+    try:
+        c = await fetch_contest(db, cid)
+        if not c:
+            raise HTTPException(404)
+        if not is_personal_mode(c):
+            raise HTTPException(400, "仅 IOI / ICPC / OI 个人赛支持虚拟参赛")
+        if contest_phase(c) != "after":
+            raise HTTPException(403, "比赛尚未结束，不能虚拟参赛")
+        cur = await db.execute(
+            "SELECT 1 FROM contest_members WHERE contest_id=? AND user_id=?",
+            (cid, user["id"]))
+        if await cur.fetchone():
+            raise HTTPException(403, "你已正式参赛，不能再虚拟参赛")
+        if await fetch_virtual(db, cid, user["id"]):
+            raise HTTPException(400, "已经开始过虚拟参赛")
+        await db.execute(
+            "INSERT INTO contest_virtuals(contest_id,user_id,started_at) VALUES(?,?,?)",
+            (cid, user["id"], time.time()))
+        await db.commit()
+        return {"ok": True}
     finally:
         await db.close()
 
@@ -2072,6 +2185,13 @@ async def admin_get_problem(pid: int, user=Depends(current_user)):
                     pass
         p["files"] = files
         p["data_dir"] = str(pdir)
+        adir = pdir / "attach"
+        atts = []
+        if adir.exists():
+            for f in sorted(adir.iterdir()):
+                if f.is_file() and not f.name.startswith("."):
+                    atts.append({"name": f.name, "size": f.stat().st_size})
+        p["attachments"] = atts
         return {"problem": p}
     finally:
         await db.close()
