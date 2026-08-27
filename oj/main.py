@@ -2369,7 +2369,7 @@ async def admin_save_problem(
     spj_source: str = Form(""),
     grader_source: str = Form(""),
     interact_header: str = Form(""),
-    interact_header_name: str = Form("interaction.h"),
+    interact_header_name: str = Form(""),
     std_source: str = Form(""),
     author: Optional[str] = Form(None),
     file_io_in: str = Form(""),
@@ -2446,6 +2446,10 @@ async def admin_save_problem(
         fields["grader_source"] = grader_source or ""
         fields["interact_header"] = interact_header or ""
         hname = header_filename(None, interact_header_name)
+        if (not (interact_header_name or "").strip()) and id:
+            prevp = await fetch_problem(db, id)
+            if prevp:
+                hname = header_filename(prevp)
         fields["interact_header_name"] = hname
         (pdir / "grader.cpp").write_text(grader_source or "", encoding="utf-8", newline="\n")
         (pdir / hname).write_text(interact_header or "", encoding="utf-8", newline="\n")

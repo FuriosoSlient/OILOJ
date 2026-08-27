@@ -247,8 +247,8 @@ async function loadSubs(){
     </div>
     ${problem.functional?`<div class="file-io-banner">
       <strong>函数式交互</strong>
-      <span>请 <code>#include "${esc(problem.interact_header_name||'interaction.h')}"</code> 实现接口函数（如 <code>solve()</code>）。
-        <strong>不要写 main</strong>，也不要读标准输入；询问由 grader 在线回答。</span>
+      <div>请在代码里 <code>#include "${esc(problem.interact_header_name||'interaction.h')}"</code>，实现其中声明的函数（例如 <code>solve()</code>）。</div>
+      <div>不要写 <code>main</code>，也不要从标准输入读数据。测试数据和交互询问都由 grader 处理。</div>
       ${problem.interact_header?`<details style="margin-top:8px"><summary style="cursor:pointer">查看 ${esc(problem.interact_header_name||'interaction.h')}</summary>
         <pre class="code-body" style="margin-top:8px;white-space:pre-wrap">${esc(problem.interact_header)}</pre></details>`:''}
     </div>`:''}

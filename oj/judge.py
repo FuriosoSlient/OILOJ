@@ -359,8 +359,6 @@ def compile_functional(user_src, out_bin, pdir, work, problem=None) -> tuple[boo
     header = pdir / hname
     if not header.exists():
         header = pdir / "interaction.h"
-        if header.exists() and hname != "interaction.h":
-            hname = header_filename(None, "interaction.h")
     grader = pdir / "grader.cpp"
     if header.exists():
         try:

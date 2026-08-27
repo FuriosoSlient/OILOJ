@@ -141,7 +141,7 @@ async function editProblem(pid){
           <div class="form-row">
             <div class="form-group" style="flex:0 0 260px"><label>头文件名（选手 #include）</label>
               <input type="text" id="f_func_hname" value="${esc(p.interact_header_name||'interaction.h')}" placeholder="interaction.h">
-              <span class="form-hint">如 grader.h / interactive.hpp，需带 .h/.hpp</span></div>
+              <span class="form-hint">选手 #include 的文件名，例如 <code>grader.h</code></span></div>
           </div>
           <div class="form-group"><label>头文件内容（选手可见）</label>
             <textarea id="f_func_h" rows="10" spellcheck="false">${esc(p.interact_header||'')}</textarea></div>
