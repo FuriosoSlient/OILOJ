@@ -1040,6 +1040,17 @@ async def submission_access(db, sub, viewer):
     if c and is_personal_mode(c) and contest_phase(c) != "solve" and contest_phase(c) != "before":
         return True, True
 
+    is_pub = False
+    try:
+        prow = await (await db.execute(
+            "SELECT is_public FROM problems WHERE id=?", (sub["problem_id"],))).fetchone()
+        is_pub = bool(prow and prow["is_public"])
+    except Exception:
+        is_pub = False
+    # 公开题：赛后或非比赛提交，任何人可看代码与测试点
+    if is_pub and (not c or contest_phase(c) == "after"):
+        return True, True
+
     if not cid or not c:
         return True, False
 
