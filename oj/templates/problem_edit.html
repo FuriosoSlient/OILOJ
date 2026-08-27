@@ -485,6 +485,7 @@ async function saveProblem(quiet){
     checker_type:g('f_checker'), spj_source:g('f_spj'), std_source:g('f_std'), author:g('f_author'),
     file_io_in:g('f_fio_in'), file_io_out:g('f_fio_out'),
     grader_source:g('f_func_g'), interact_header:g('f_func_h'),
+    interact_header_name:g('f_func_hname') || 'interaction.h',
     use_subtasks: useSubOn() ? '1' : '0',
     hack_validator: g('f_hack_val'),
     subtasks: JSON.stringify(editing.subtasks||[]),
