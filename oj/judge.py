@@ -163,8 +163,36 @@ def _read_vmhwm_kb(pid):
     return 0
 
 
+def _place_answer(work, ans_path):
+    """Copy/hardlink the official .out into the sandbox as answer.out.
+
+    Grader reads it as argv[1] and/or the file \"answer.out\". Returns the
+    argv token (relative name) or None.
+    """
+    if not work or not ans_path:
+        return None
+    src = Path(ans_path)
+    if not src.is_file():
+        return None
+    dst = Path(work) / "answer.out"
+    try:
+        if dst.exists() or dst.is_symlink():
+            dst.unlink()
+    except Exception:
+        pass
+    try:
+        os.link(src, dst)
+    except Exception:
+        try:
+            shutil.copyfile(src, dst)
+        except Exception:
+            write_text(dst, read_text(src))
+    return "answer.out"
+
+
 def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb,
-                cwd=None, file_in=None, file_out=None, stdin_path=None):
+                cwd=None, file_in=None, file_out=None, stdin_path=None,
+                ans_path=None, extra_args=None):
     """Run a binary; returns (rc, stdout, stderr, status, elapsed_ms, max_rss_kb).
 
     I/O is pumped by helper threads and the child is reaped with os.wait4(), which
@@ -182,8 +210,15 @@ def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb,
         except Exception:
             pass
 
+    argv = [bin_path]
+    ans_arg = _place_answer(work, ans_path)
+    if ans_arg:
+        argv.append(ans_arg)
+    if extra_args:
+        argv += [str(a) for a in extra_args if a]
+
     popen_kw = dict(
-        args=[bin_path],
+        args=argv,
         stdin=stdin_f if stdin_f is not None else subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -331,19 +366,16 @@ def compile_functional(user_src, out_bin, pdir, work) -> tuple[bool, str]:
 
 
 def functional_verdict(status, rc, out, expected):
+    """Grader is the checker: exit 0/7 = AC, 1/2 = WA. Do not token-compare
+    against .out — that file is for the grader to read, not for stdout."""
     if status in ("TLE", "MLE", "SE"):
         return status
-    if status == "RE":
-        if rc in (1, 2):
-            return "WA"
-        if rc in (0, 7):
-            status = "AC"
-        else:
-            return "RE"
-    if status == "AC":
-        if expected is not None:
-            return "AC" if token_compare(out, expected) else "WA"
+    if rc in (0, 7) or status == "AC":
         return "AC"
+    if rc in (1, 2):
+        return "WA"
+    if status == "RE":
+        return "RE"
     return status
 
 
@@ -741,10 +773,11 @@ def _build_checker(problem, pdir, work):
 
 
 def _run_one(binp, inp, tl, ml, label, cwd=None, file_in=None, file_out=None,
-             functional=False):
+             functional=False, ans_path=None):
     """Execute a program once and package the outcome for the UI."""
     rc, out, err, status, elapsed, rss = run_process(
-        str(binp), inp, tl, ml, cwd=cwd, file_in=file_in, file_out=file_out)
+        str(binp), inp, tl, ml, cwd=cwd, file_in=file_in, file_out=file_out,
+        ans_path=ans_path)
     if functional:
         status = functional_verdict(status, rc, out, None)
     return {
@@ -827,6 +860,7 @@ def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
         fio_in = safe_io_name(problem.get("file_io_in") or "")
         fio_out = safe_io_name(problem.get("file_io_out") or "")
         fun = is_functional(problem)
+        hack_ans = None
         std = _run_one(ref_bin, hack_input, max(tl * 5, 10000), 0, "标准程序 (std)",
                        cwd=str(work), file_in=fio_in or None, file_out=fio_out or None,
                        functional=fun)
@@ -836,6 +870,9 @@ def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
                     "message": f"标程在该输入上失败({std['status']})，判定为非法输入数据",
                     "detail": detail}
         expected = std["output"]
+        if fun:
+            hack_ans = Path(work) / "answer.out"
+            write_text(hack_ans, expected or "")
 
         checker_bin, cerr = _build_checker(problem, pdir, work)
         if cerr:
@@ -888,7 +925,8 @@ def evaluate_hack(problem, victim_code, hack_input, attacker_code=None,
         failed_run = None
         for i in range(max(1, runs)):
             r = _run_one(vbin, hack_input, tl, ml, f"被 Hack 程序 第 {i+1}/{runs} 次",
-                         cwd=str(work), file_in=fio_in or None, file_out=fio_out or None)
+                         cwd=str(work), file_in=fio_in or None, file_out=fio_out or None,
+                         functional=fun, ans_path=hack_ans)
             if r["status"] == "AC":
                 okc, msg = verify(r["output"])
                 r["checker"] = msg

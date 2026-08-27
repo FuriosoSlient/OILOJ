@@ -2173,31 +2173,44 @@ FUNC_GRADER_TEMPLATE = r"""#include "interaction.h"
 #include <bits/stdc++.h>
 using namespace std;
 
-// 函数式交互 grader：main 在这里。stdin 由 grader 读入测试数据，
-// 再调用选手的 solve()。exit(0)=通过，exit(1)=WA。选手不要写 main。
+// 函数式交互 grader（强制在线）：
+//   stdin     = 测试点 .in（给 grader 的完整数据，可含隐藏序列）
+//   argv[1]   = 测试点 .out（标准答案）。沙箱里也有文件 answer.out
+//   选手只实现 solve()，不要写 main，也不要自己读 stdin。
+//   不必在 grader 里内置标程：答案从 .out 读。
+//   exit(0)=AC  exit(1)=WA
+// Hack 跑标程时可能没有 argv[1]，此时把标程给出的答案写到 stdout。
 
-static int n, secret, qcnt, answered;
+static int n, qcnt, answered, has_ans, stdans;
+static vector<int> hidden;
 
 int get_n() { return n; }
 
 int query(int x) {
     qcnt++;
-    if (qcnt > 40) { cerr << "too many queries\n"; exit(1); }
-    if (x < secret) return -1;
-    if (x > secret) return 1;
-    return 0;
+    if (x < 1 || x > n) { cerr << "invalid query\n"; exit(1); }
+    return hidden[x];
 }
 
 void answer(int x) {
     answered = 1;
-    if (x == secret) exit(0);
-    exit(1);
+    if (has_ans) exit(x == stdans ? 0 : 1);
+    cout << x << "\n";
+    exit(0);
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
-    if (!(cin >> n >> secret)) return 3;
+    if (!(cin >> n)) return 3;
+    hidden.assign(n + 1, 0);
+    for (int i = 1; i <= n; i++) cin >> hidden[i];
+
+    ifstream fans;
+    if (argc >= 2) fans.open(argv[1]);
+    if (!fans.is_open()) fans.open("answer.out");
+    if (fans >> stdans) has_ans = 1;
+
     solve();
     return answered ? 0 : 1;
 }
