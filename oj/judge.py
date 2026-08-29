@@ -141,13 +141,15 @@ def _stage_input(work, stdin_data, stdin_path, file_in):
                     shutil.copyfile(src, named)
                 except Exception:
                     write_text(named, read_text(src))
-            return open(named, "rb"), None, named
+            # File IO: only the named file. Do NOT also attach it as stdin —
+            # that made libc/page-cache show up as extra RSS (false MLE).
+            return None, None, named
         return open(src, "rb"), None, None
     text = stdin_data if isinstance(stdin_data, str) else (
         (stdin_data or b"").decode("utf-8", errors="replace"))
     if named:
         write_text(named, text)
-        return open(named, "rb"), None, named
+        return None, None, named
     payload = text.encode("utf-8") if text else b""
     return None, payload, None
 
@@ -217,10 +219,12 @@ def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb,
     if extra_args:
         argv += [str(a) for a in extra_args if a]
 
+    fout_path = (work / fout) if (work and fout) else None
     popen_kw = dict(
         args=argv,
-        stdin=stdin_f if stdin_f is not None else subprocess.PIPE,
-        stdout=subprocess.PIPE,
+        stdin=stdin_f if stdin_f is not None else (
+            subprocess.DEVNULL if _named else subprocess.PIPE),
+        stdout=subprocess.DEVNULL if fout_path else subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=str(work) if work else None,
         **_popen_kwargs(),
@@ -235,7 +239,7 @@ def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb,
         except Exception:
             pass
         return -1, "", str(e), "RE", 0, 0
-    redirected_in = stdin_f is not None
+    redirected_in = stdin_f is not None or _named is not None
     try:
         if stdin_f:
             stdin_f.close()
@@ -247,7 +251,8 @@ def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb,
     threads = []
     if not redirected_in:
         threads.append(threading.Thread(target=_pump, args=(proc.stdin, None, payload or b""), daemon=True))
-    threads.append(threading.Thread(target=_pump, args=(proc.stdout, out_buf), daemon=True))
+    if not fout_path:
+        threads.append(threading.Thread(target=_pump, args=(proc.stdout, out_buf), daemon=True))
     threads.append(threading.Thread(target=_pump, args=(proc.stderr, err_buf), daemon=True))
     t0 = time.time()
     for t in threads:
@@ -256,16 +261,16 @@ def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb,
     rc, max_rss_kb, timed_out, term_sig = None, 0, False, 0
     if _HAS_RESOURCE and not IS_WIN:
         while True:
-            hwm = _read_vmhwm_kb(proc.pid)
-            if hwm > max_rss_kb:
-                max_rss_kb = hwm
             try:
                 pid, sts, ru = os.wait4(proc.pid, os.WNOHANG)
             except (ChildProcessError, OSError):
                 pid, sts, ru = proc.pid, 0, None
             if pid:
+                # Linux ru_maxrss is KB for THIS child only. Do not poll
+                # /proc/pid/status VmHWM — a reused pid under load caused
+                # sporadic fake MLEs, especially on file-IO cases.
                 if ru is not None:
-                    max_rss_kb = max(max_rss_kb, int(ru.ru_maxrss))
+                    max_rss_kb = max(max_rss_kb, int(ru.ru_maxrss or 0))
                 if os.WIFSIGNALED(sts):
                     term_sig = os.WTERMSIG(sts)
                     rc = -term_sig
@@ -279,7 +284,7 @@ def run_process(bin_path, stdin_data, time_limit_ms, memory_limit_mb,
                 try:
                     _p, sts, ru = os.wait4(proc.pid, 0)
                     if ru is not None:
-                        max_rss_kb = max(max_rss_kb, int(ru.ru_maxrss))
+                        max_rss_kb = max(max_rss_kb, int(ru.ru_maxrss or 0))
                     if os.WIFSIGNALED(sts):
                         term_sig = os.WTERMSIG(sts)
                     proc.returncode = -9
